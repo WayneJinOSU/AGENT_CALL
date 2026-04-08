@@ -1,0 +1,25 @@
+[project]
+name = "agent-call"
+version = "0.1.0"
+description = "Single WebSocket AI session server built on pipecat-ai."
+requires-python = ">=3.11"
+dependencies = [
+  "alembic>=1.18.0",
+  "asyncmy>=0.2.11",
+  "fastapi>=0.127.1",
+  "httpx>=0.28.1",
+  "pipecat-ai[websocket,deepgram,cartesia]==0.0.104",
+  "pydantic>=2.12.5",
+  "pytest>=8.4.2",
+  "pytest-asyncio>=0.26.0",
+  "sqlalchemy>=2.0.49",
+  "uvicorn>=0.44.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.alembic]
+script_location = "migrations"
