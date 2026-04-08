@@ -177,6 +177,21 @@ class PipecatServiceFactory:
         raise UnsupportedProviderError(f"{provider} requires {env_name} or explicit api_key in provider config")
 
     @staticmethod
+    def _required_secret_from_envs(
+        value: str | None,
+        env_names: tuple[str, ...],
+        provider: str,
+    ) -> str:
+        if value:
+            return value
+        for env_name in env_names:
+            env_value = os.getenv(env_name)
+            if env_value:
+                return env_value
+        joined = " / ".join(env_names)
+        raise UnsupportedProviderError(f"{provider} requires one of [{joined}] or explicit api_key in provider config")
+
+    @staticmethod
     def _to_language(raw: str | None) -> Language | None:
         if not raw:
             return None
@@ -197,14 +212,14 @@ class PipecatServiceFactory:
         if provider == "reference":
             return ReferenceSTTProcessor(model_name=model)
         if provider == "deepgram":
-            api_key = self._required_secret(
+            api_key = self._required_secret_from_envs(
                 self._option(options, "api_key", "apiKey"),
-                "DEEPGRAM_API_KEY",
+                ("DEEPGRAM_API_KEY", "ASR_API_KEY", "ARS_API_KEY"),
                 provider,
             )
             live_options = LiveOptions(
                 encoding=self._option(options, "encoding", default="linear16"),
-                language=self._option(options, "language", default="en"),
+                language=self._option(options, "language", default="zh"),
                 model=model or self._option(options, "model", default="nova-3-general"),
                 channels=int(self._option(options, "channels", default=1)),
                 interim_results=bool(self._option(options, "interim_results", default=True)),
@@ -252,13 +267,17 @@ class PipecatServiceFactory:
         if provider == "reference":
             return ReferenceTTSProcessor(voice_name=voice or model)
         if provider == "cartesia":
-            api_key = self._required_secret(
+            api_key = self._required_secret_from_envs(
                 self._option(options, "api_key", "apiKey"),
-                "CARTESIA_API_KEY",
+                ("CARTESIA_API_KEY", "TTS_API_KEY"),
                 provider,
             )
             voice_id = self._option(options, "voice_id", "voiceId", "voice", default=voice)
-            voice_id = self._required_secret(voice_id, "CARTESIA_VOICE_ID", provider)
+            voice_id = self._required_secret_from_envs(
+                voice_id,
+                ("CARTESIA_VOICE_ID", "TTS_VOICE_ID", "VOICE_ID"),
+                provider,
+            )
             sample_rate = int(
                 self._option(
                     options,
@@ -270,8 +289,8 @@ class PipecatServiceFactory:
             params = CartesiaTTSService.InputParams(language=language) if language else None
             return CartesiaTTSService(
                 api_key=api_key,
-                voice_id=voice_id,
-                model=model or self._option(options, "model", default="sonic-3"),
+                voice_id=voice_id if voice_id else 'bf32f8497bc94b918c62954588efcc30',
+                model=model or self._option(options, "model", default="sonic-2"),
                 sample_rate=sample_rate,
                 encoding=self._option(options, "encoding", default="pcm_s16le"),
                 container=self._option(options, "container", default="raw"),
@@ -288,18 +307,22 @@ class PipecatServiceFactory:
         options: dict[str, Any],
     ) -> FrameProcessor:
         if provider == "openrouter":
-            api_key = self._required_secret(
+            api_key = self._required_secret_from_envs(
                 self._option(options, "api_key", "apiKey"),
-                "OPENROUTER_API_KEY",
+                ("OPENROUTER_API_KEY", "LLM_API_KEY"),
                 provider,
             )
             base_url = self._option(
                 options,
                 "base_url",
                 "baseUrl",
-                default="https://openrouter.ai/api/v1",
+                default=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
             )
-            model_name = model or self._option(options, "model", default="openai/gpt-4.1-mini")
+            model_name = model or self._option(
+                options,
+                "model",
+                default=os.getenv("OPENROUTER_MODEL", os.getenv("LLM_MODEL", "openai/gpt-4.1-mini")),
+            )
             default_headers = dict(self._option(options, "headers", default={}) or {})
             referer = self._option(options, "referer", default=os.getenv("OPENROUTER_HTTP_REFERER"))
             x_title = self._option(options, "title", default=os.getenv("OPENROUTER_X_TITLE"))
@@ -308,13 +331,13 @@ class PipecatServiceFactory:
             if x_title:
                 default_headers.setdefault("X-Title", str(x_title))
         else:
-            api_key = self._required_secret(
+            api_key = self._required_secret_from_envs(
                 self._option(options, "api_key", "apiKey"),
-                "OPENAI_API_KEY",
+                ("OPENAI_API_KEY", "LLM_API_KEY"),
                 provider,
             )
             base_url = self._option(options, "base_url", "baseUrl", default=None)
-            model_name = model or self._option(options, "model", default="gpt-4.1")
+            model_name = model or self._option(options, "model", default=os.getenv("OPENAI_MODEL", "gpt-4.1"))
             default_headers = dict(self._option(options, "headers", default={}) or {})
 
         llm_params = BaseOpenAILLMService.InputParams(

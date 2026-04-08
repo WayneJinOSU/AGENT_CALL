@@ -78,6 +78,33 @@ def test_factory_supports_openrouter_with_openai_compatible_service(
     assert type(tts).__name__ == "CartesiaTTSService"
 
 
+def test_factory_supports_generic_env_key_names(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("DEEPGRAM_API_KEY", raising=False)
+    monkeypatch.delenv("CARTESIA_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setenv("ARS_API_KEY", "generic-asr-key")
+    monkeypatch.setenv("TTS_API_KEY", "generic-tts-key")
+    monkeypatch.setenv("TTS_VOICE_ID", "11111111-1111-1111-1111-111111111111")
+    monkeypatch.setenv("LLM_API_KEY", "generic-llm-key")
+
+    router = ProviderRouter()
+    selection = ProviderSelection.model_validate(
+        {
+            "asr": {"provider": "deepgram", "model": "nova-3-general"},
+            "llm": {"provider": "openrouter", "model": "openai/gpt-4.1-mini"},
+            "tts": {"provider": "cartesia", "model": "sonic-3"},
+        }
+    )
+    resolved = router.resolve(selection)
+    asr, llm, tts = PipecatServiceFactory().create_services(
+        providers=resolved,
+        text_supplier=lambda: "hello",
+    )
+    assert type(asr).__name__ == "DeepgramSTTService"
+    assert type(llm).__name__ == "OpenAILLMService"
+    assert type(tts).__name__ == "CartesiaTTSService"
+
+
 def test_factory_deepgram_requires_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("DEEPGRAM_API_KEY", raising=False)
     router = ProviderRouter()
