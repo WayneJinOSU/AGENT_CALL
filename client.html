@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AGENT_CALL Web 客户端</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-grad-1: #0f172a;
+            --bg-grad-2: #1e1b4b;
+            --accent: #38bdf8;
+            --accent-hover: #0ea5e9;
+            --danger: #f43f5e;
+            --danger-hover: #e11d48;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --glass-bg: rgba(255, 255, 255, 0.05);
+            --glass-border: rgba(255, 255, 255, 0.1);
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: linear-gradient(135deg, var(--bg-grad-1), var(--bg-grad-2));
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .container {
+            width: 90%;
+            max-width: 800px;
+            background: var(--glass-bg);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid var(--glass-border);
+            border-radius: 24px;
+            padding: 40px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            font-weight: 800;
+            background: linear-gradient(to right, #38bdf8, #818cf8);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 15px;
+        }
+
+        .header p { color: var(--text-muted); font-size: 1.1rem; }
+
+        .controls {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        button {
+            padding: 14px 32px;
+            font-size: 1.1rem;
+            font-weight: 600;
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.2);
+            color: white;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none !important;
+        }
+
+        #connectBtn { background-color: var(--accent); }
+        #connectBtn:hover:not(:disabled) {
+            background-color: var(--accent-hover);
+            transform: translateY(-2px);
+        }
+
+        #disconnectBtn { background-color: var(--danger); }
+        #disconnectBtn:hover:not(:disabled) {
+            background-color: var(--danger-hover);
+            transform: translateY(-2px);
+        }
+
+        .log-container {
+            background: rgba(0, 0, 0, 0.4);
+            border-radius: 16px;
+            padding: 20px;
+            height: 300px;
+            overflow-y: auto;
+            border: 1px solid var(--glass-border);
+            font-family: monospace;
+            font-size: 0.9rem;
+            line-height: 1.5;
+        }
+
+        .log-entry { margin-bottom: 8px; display: flex; gap: 10px; }
+        .log-time { color: var(--text-muted); font-size: 0.8rem; flex-shrink: 0;}
+        .log-msg { word-break: break-all; }
+        
+        .type-info { color: #38bdf8; }
+        .type-recv { color: #34d399; }
+        .type-send { color: #f472b6; }
+        .type-err { color: #f87171; }
+
+        .status-dot {
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background-color: var(--text-muted);
+            display: inline-block;
+        }
+        
+        .status-dot.active {
+            background-color: #34d399;
+            box-shadow: 0 0 12px #34d399;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.7); }
+            70% { box-shadow: 0 0 0 10px rgba(52, 211, 153, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); }
+        }
+
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.2); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.2); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.4); }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1><span class="status-dot" id="statusDot"></span> AGENT CALL Console</h1>
+            <p>基于 WebSocket 的 8000Hz PCM 实时通话终端</p>
+        </div>
+        
+        <div class="controls">
+            <button id="connectBtn">
+                <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
+                发起呼叫 (Connect)
+            </button>
+            <button id="disconnectBtn" disabled>
+                <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path><path stroke-linecap="round" stroke-linejoin="round" d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z"></path></svg>
+                挂断 (Disconnect)
+            </button>
+        </div>
+
+        <div class="log-container" id="logs"></div>
+    </div>
+
+    <script>
+        const connectBtn = document.getElementById('connectBtn');
+        const disconnectBtn = document.getElementById('disconnectBtn');
+        const logsDiv = document.getElementById('logs');
+        const statusDot = document.getElementById('statusDot');
+
+        let ws = null;
+        let audioCtx = null;
+        let micStream = null;
+        let scriptNode = null;
+        let nextPlayTime = 0;
+        let sessionReady = false;
+
+        function log(msg, type = 'info') {
+            const entry = document.createElement('div');
+            entry.className = 'log-entry';
+            const time = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 3 });
+            entry.innerHTML = `<span class="log-time">[${time}]</span><span class="log-msg type-${type}">${msg}</span>`;
+            logsDiv.appendChild(entry);
+            logsDiv.scrollTop = logsDiv.scrollHeight;
+        }
+
+        async function initAudio() {
+            try {
+                // 1. 设置 Web Audio API 环境
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 8000 });
+                micStream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, sampleRate: 8000 } });
+                log(`🎤 麦克风访问成功，AudioContext采样率: ${audioCtx.sampleRate}Hz`, 'info');
+
+                const source = audioCtx.createMediaStreamSource(micStream);
+                // 使用 buffer size: 4096 来平衡采集频率与性能 （大约每 0.5s 发送一次流）
+                scriptNode = audioCtx.createScriptProcessor(4096, 1, 1);
+
+                // 2. 收集来自麦克风的数据帧，发送往 WebSocket
+                scriptNode.onaudioprocess = (e) => {
+                    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+                    if (!sessionReady) return;
+                    const input = e.inputBuffer.getChannelData(0); // Float32: -1.0 到 1.0
+
+                    // 强制下采样到 8k，避免浏览器实际运行在 44.1k/48k 造成 ASR 识别异常。
+                    const downsampled = downsampleTo8k(input, audioCtx.sampleRate);
+                    
+                    // 必须转换为服务端要求的 PCM 16-bit 格式
+                    const int16Buffer = new Int16Array(downsampled.length);
+                    for (let i = 0; i < downsampled.length; i++) {
+                        let s = Math.max(-1, Math.min(1, downsampled[i]));
+                        int16Buffer[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                    }
+                    ws.send(int16Buffer.buffer); // 发送二进制的 Array Buffer
+                };
+
+                const gainNode = audioCtx.createGain();
+                gainNode.gain.value = 0; // 丢弃采集的声音以防止本机麦克风到扬声器的啸叫
+
+                source.connect(scriptNode);
+                scriptNode.connect(gainNode);
+                gainNode.connect(audioCtx.destination);
+                
+                nextPlayTime = audioCtx.currentTime;
+            } catch (err) {
+                log(`❌ 麦克风初始化失败: ${err.message}`, 'err');
+                throw err;
+            }
+        }
+
+        function downsampleTo8k(float32Data, inputRate) {
+            const targetRate = 8000;
+            if (inputRate === targetRate) return float32Data;
+            const ratio = inputRate / targetRate;
+            const outputLength = Math.max(1, Math.floor(float32Data.length / ratio));
+            const output = new Float32Array(outputLength);
+            let sourceIndex = 0;
+            for (let i = 0; i < outputLength; i++) {
+                const nextSourceIndex = Math.min(float32Data.length, Math.floor((i + 1) * ratio));
+                let sum = 0;
+                let count = 0;
+                for (let j = sourceIndex; j < nextSourceIndex; j++) {
+                    sum += float32Data[j];
+                    count++;
+                }
+                output[i] = count > 0 ? (sum / count) : 0;
+                sourceIndex = nextSourceIndex;
+            }
+            return output;
+        }
+
+        // 3. 处理从服务端收到的音频数据以进行发声
+        function playPcm(buffer) {
+            if (!audioCtx) return;
+            const int16 = new Int16Array(buffer);
+            const float32 = new Float32Array(int16.length);
+            
+            // 将接收的 PCM 16-bit 还原为 Web API 所支持的 Float32
+            for (let i = 0; i < int16.length; i++) {
+                float32[i] = int16[i] / 32768.0;
+            }
+            
+            const audioBuffer = audioCtx.createBuffer(1, float32.length, 8000);
+            audioBuffer.getChannelData(0).set(float32);
+
+            const source = audioCtx.createBufferSource();
+            source.buffer = audioBuffer;
+            source.connect(audioCtx.destination);
+
+            // 排队播放算法：保证音频块之间平滑衔接不卡顿
+            if (nextPlayTime < audioCtx.currentTime) {
+                nextPlayTime = audioCtx.currentTime + 0.05; 
+            }
+            source.start(nextPlayTime);
+            nextPlayTime += audioBuffer.duration;
+        }
+
+        function generateReqId() {
+            return 'req_' + Math.random().toString(36).substring(2, 9);
+        }
+
+        connectBtn.addEventListener('click', async () => {
+            try {
+                connectBtn.disabled = true;
+                await initAudio();
+
+                log('🌐 正在连接后端 WebSocket 服务...', 'info');
+                ws = new WebSocket('ws://127.0.0.1:8000/v1/outbound/session');
+                ws.binaryType = 'arraybuffer'; // 确保接收格式为 ArrayBuffer（而不是 Blob）以直接解码
+
+                ws.onopen = () => {
+                    statusDot.classList.add('active');
+                    disconnectBtn.disabled = false;
+                    log('✅ WebSocket 连接成功！正在下发参数协议包...', 'info');
+                    
+                    // 下发我们在项目中确立的标准开局载荷 (SessionStartMessage)
+                    const startMessage = {
+                        type: "session.start",
+                        request_id: generateReqId(),
+                        payload: {
+                            conversation: {
+                                language: "zh-CN",
+                                system_prompt: "You are a helpful assistant",
+                                initial_messages: [{"role": "user", "content": "你好"}]
+                            },
+                            media: { encoding: "pcm_s16le", sample_rate: 8000, channels: 1 },
+                            providers: {
+                                asr: {
+                                    provider: "deepgram",
+                                    model: "nova-3-general",
+                                    language: "zh",
+                                    encoding: "linear16",
+                                    sample_rate: 8000,
+                                    channels: 1,
+                                    interim_results: true
+                                },
+                                llm: {
+                                    provider: "openrouter",
+                                    model: "openai/gpt-4.1-mini"
+                                },
+                                tts: {
+                                    provider: "cartesia",
+                                    model: "sonic-2",
+                                    voice: "bf32f849-7bc9-4b91-8c62-954588efcc30",
+                                    language: "zh-CN",
+                                    encoding: "pcm_s16le",
+                                    container: "raw"
+                                }
+                            },
+                            runtime: { barge_in: true, silence_timeout_ms: 60000, max_session_duration_ms: 180000 },
+                            metadata: { client: "html-web-client" }
+                        }
+                    };
+                    
+                    ws.send(JSON.stringify(startMessage));
+                    log(`>> 发送控制帧: [session.start]`, 'send');
+                };
+
+                ws.onmessage = (event) => {
+                    if (typeof event.data === 'string') {
+                        try {
+                            const data = JSON.parse(event.data);
+                            log(`<< 收到系统反馈: [${data.type}]`, 'recv');
+                            if (data.type === 'session.ready') {
+                                sessionReady = true;
+                                log('🟢 session.ready 已收到，开始推送麦克风PCM流', 'info');
+                            }
+                            // 失败或者断线，执行清理
+                            if(data.type === 'session.failed' || data.type === 'session.finalized') {
+                                cleanup();
+                            }
+                        } catch (e) {
+                            log(event.data, 'recv');
+                        }
+                    } else if (event.data instanceof ArrayBuffer) {
+                        // Receiving binary PCM audio chunk !
+                        playPcm(event.data);
+                    }
+                };
+
+                ws.onclose = (e) => {
+                    log(`✖ 服务端 WebSocket 断连 (代码: ${e.code})`, 'err');
+                    cleanup();
+                };
+
+                ws.onerror = (err) => {
+                    log(`✖ 发生 WebSocket 网络层面异常`, 'err');
+                };
+            } catch (err) {
+                cleanup();
+            }
+        });
+
+        disconnectBtn.addEventListener('click', () => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                const stopMessage = {
+                    type: "session.stop",
+                    request_id: generateReqId(),
+                    payload: { session_id: "current", reason: "client_disconnected" }
+                };
+                ws.send(JSON.stringify(stopMessage));
+                log('>> 发送控制帧: [session.stop]', 'send');
+                ws.close();
+            }
+            cleanup();
+        });
+
+        function cleanup() {
+            sessionReady = false;
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+            if (scriptNode) {
+                scriptNode.disconnect();
+                scriptNode = null;
+            }
+            if (micStream) {
+                micStream.getTracks().forEach(track => track.stop());
+                micStream = null;
+            }
+            if (audioCtx) {
+                audioCtx.close();
+                audioCtx = null;
+            }
+            statusDot.classList.remove('active');
+            connectBtn.disabled = false;
+            disconnectBtn.disabled = true;
+            log('🧹 释放本地音频驱动资源', 'info');
+        }
+    </script>
+</body>
+</html>
