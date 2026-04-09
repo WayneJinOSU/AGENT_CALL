@@ -17,6 +17,7 @@ depends_on = None
 
 
 def upgrade() -> None:
+    """创建 V1 核心 5 张业务表及索引。"""
     op.create_table(
         "session_record",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
@@ -127,6 +128,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """回滚 V1 核心表结构。"""
     op.drop_index("ix_transcript_log_session_type", table_name="transcript_log")
     op.drop_index("ix_transcript_log_session_turn", table_name="transcript_log")
     op.drop_table("transcript_log")

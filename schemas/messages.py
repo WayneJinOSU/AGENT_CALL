@@ -1,3 +1,5 @@
+"""北向 WebSocket 消息 schema。"""
+
 from __future__ import annotations
 
 from typing import Any, Literal
@@ -9,6 +11,7 @@ from schemas.session import ConversationConfig, MediaConfig, MetadataPayload, Ru
 
 
 class SessionStartPayload(BaseModel):
+    """session.start 的业务载荷。"""
     model_config = ConfigDict(extra="ignore")
 
     session_type: str = "outbound_voice"
@@ -20,6 +23,7 @@ class SessionStartPayload(BaseModel):
 
 
 class SessionStartMessage(BaseModel):
+    """启动会话控制消息。"""
     model_config = ConfigDict(extra="ignore")
 
     type: Literal["session.start"]
@@ -28,6 +32,7 @@ class SessionStartMessage(BaseModel):
 
 
 class SessionStopPayload(BaseModel):
+    """session.stop 的业务载荷。"""
     model_config = ConfigDict(extra="ignore")
 
     session_id: str
@@ -35,6 +40,7 @@ class SessionStopPayload(BaseModel):
 
 
 class SessionStopMessage(BaseModel):
+    """结束会话控制消息。"""
     model_config = ConfigDict(extra="ignore")
 
     type: Literal["session.stop"]
@@ -43,12 +49,14 @@ class SessionStopMessage(BaseModel):
 
 
 class SessionReadyPayload(BaseModel):
+    """session.ready 返回载荷。"""
     model_config = ConfigDict(extra="ignore")
 
     media: MediaConfig
 
 
 class SessionReadyMessage(BaseModel):
+    """会话就绪消息。"""
     type: Literal["session.ready"] = "session.ready"
     session_id: str
     trace_id: str
@@ -57,12 +65,14 @@ class SessionReadyMessage(BaseModel):
 
 
 class SessionFailedPayload(BaseModel):
+    """会话失败载荷。"""
     status: SessionStatus = SessionStatus.FAILED
     termination_code: TerminationCode
     detail: str | None = None
 
 
 class SessionFailedMessage(BaseModel):
+    """会话失败消息。"""
     type: Literal["session.failed"] = "session.failed"
     session_id: str
     trace_id: str
@@ -71,6 +81,7 @@ class SessionFailedMessage(BaseModel):
 
 
 class SessionFinalizedPayload(BaseModel):
+    """会话结束并入库完成后的汇总载荷。"""
     status: SessionStatus
     termination_code: TerminationCode
     turn_count: int
@@ -79,9 +90,9 @@ class SessionFinalizedPayload(BaseModel):
 
 
 class SessionFinalizedMessage(BaseModel):
+    """最终完成信号。"""
     type: Literal["session.finalized"] = "session.finalized"
     session_id: str
     trace_id: str
     timestamp: str
     payload: SessionFinalizedPayload
-

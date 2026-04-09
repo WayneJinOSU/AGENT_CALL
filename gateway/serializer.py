@@ -1,3 +1,8 @@
+"""北向协议序列化器。
+
+该模块把 WebSocket 文本/二进制帧转换为 Pipecat 可消费的 Frame。
+"""
+
 from __future__ import annotations
 
 import audioop
@@ -14,6 +19,12 @@ from runtime.transport import SessionControlFrame
 
 
 class SessionProtocolFrameSerializer(FrameSerializer):
+    """
+    Northbound WS protocol serializer:
+    - text frame <-> SessionControlFrame
+    - binary frame <-> raw PCM Input/OutputAudio frames
+    """
+
     _DISALLOWED_BINARY_SIGNATURES = {
         b"\x89PNG\r\n\x1a\n": "png",
         b"\xff\xd8\xff": "jpeg",
@@ -44,6 +55,7 @@ class SessionProtocolFrameSerializer(FrameSerializer):
         self._filter_drop_count = 0
 
     async def setup(self, frame: StartFrame) -> None:
+        # Align serializer runtime sample rates with transport StartFrame.
         audio_in_sample_rate = getattr(frame, "audio_in_sample_rate", None)
         if audio_in_sample_rate:
             self.sample_rate = audio_in_sample_rate
@@ -51,10 +63,12 @@ class SessionProtocolFrameSerializer(FrameSerializer):
         self.output_sample_rate = getattr(frame, "audio_out_sample_rate", self.output_sample_rate)
 
     def _is_valid_pcm16_frame(self, payload: bytes) -> bool:
+        """校验二进制帧是否满足 PCM16 对齐。"""
         bytes_per_sample = 2 * max(1, self.channels)
         return len(payload) > 0 and len(payload) % bytes_per_sample == 0
 
     def _detect_binary_signature(self, payload: bytes) -> str | None:
+        """识别常见文件签名，避免把非音频文件误当 PCM。"""
         head = payload[:12]
         for signature, media_type in self._DISALLOWED_BINARY_SIGNATURES.items():
             if head.startswith(signature):
@@ -62,12 +76,14 @@ class SessionProtocolFrameSerializer(FrameSerializer):
         return None
 
     def _binary_preview(self, payload: bytes, limit: int = 24) -> str:
+        """用于日志排障的短摘要（hash + hex preview）。"""
         preview = payload[:limit].hex()
         digest = hashlib.sha1(payload).hexdigest()[:12]
         return f"sha1={digest} preview_hex={preview}"
 
     async def deserialize(self, data: str | bytes) -> Frame | None:
         if isinstance(data, (bytes, bytearray)):
+            # Binary path: strict PCM gate to keep media contract simple and safe.
             started = perf_counter()
             audio = bytes(data)
             media_type = self._detect_binary_signature(audio)
@@ -96,6 +112,7 @@ class SessionProtocolFrameSerializer(FrameSerializer):
                 )
                 return None
             if self.input_sample_rate != self.sample_rate:
+                # Resample inbound PCM if upstream and runtime sample rates diverge.
                 audio = audioop.ratecv(
                     audio,
                     2,
@@ -108,6 +125,7 @@ class SessionProtocolFrameSerializer(FrameSerializer):
             return InputAudioRawFrame(audio=audio, sample_rate=self.sample_rate, num_channels=self.channels)
 
         try:
+            # Text path: only control protocol messages are accepted.
             message = parse_text_message(data)
         except ProtocolError as exc:
             logging.warning("SessionProtocolFrameSerializer ignored invalid text frame: %s", exc)
@@ -123,6 +141,7 @@ class SessionProtocolFrameSerializer(FrameSerializer):
         if self.should_ignore_frame(frame):
             return None
         if isinstance(frame, (AudioRawFrame, OutputAudioRawFrame)):
+            # Runtime audio is always sent northbound as raw PCM binary chunks.
             audio = frame.audio
             sample_rate = getattr(frame, "sample_rate", self.output_sample_rate)
             channels = getattr(frame, "num_channels", self.channels)
@@ -138,6 +157,7 @@ class SessionProtocolFrameSerializer(FrameSerializer):
             self.output_audio_bytes += len(audio)
             return audio
         if isinstance(frame, SessionControlFrame):
+            # Kept for completeness; current northbound control is mainly one-way (server -> ready/failed/finalized).
             return json.dumps(
                 {
                     "type": frame.message_type,

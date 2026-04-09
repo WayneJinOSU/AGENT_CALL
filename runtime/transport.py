@@ -1,3 +1,11 @@
+"""传输桥接层。
+
+职责：
+- 将北向控制帧插入 pipeline（SessionControlFrame）
+- 把 session.stop 转为运行时停止动作
+- 统一 FastAPIWebsocketTransport 初始化参数
+"""
+
 from __future__ import annotations
 
 import logging
@@ -15,6 +23,7 @@ from settings import settings
 
 @dataclass
 class SessionControlFrame(Frame):
+    """Internal control frame generated from JSON control messages."""
     message_type: str
     request_id: str
     payload: dict[str, Any] = field(default_factory=dict)
@@ -25,6 +34,12 @@ InputActivityHandler = Callable[[int], Awaitable[None]]
 
 
 class SessionMessageRouter(FrameProcessor):
+    """
+    Lightweight control router inside pipeline.
+    - handles session.stop
+    - tracks inbound audio activity for silence policy/metrics
+    """
+
     def __init__(
         self,
         *,
@@ -39,6 +54,7 @@ class SessionMessageRouter(FrameProcessor):
         await super().process_frame(frame, direction)
 
         if isinstance(frame, SessionControlFrame):
+            # session.stop does not continue downstream; it triggers orchestrator stop.
             if frame.message_type == "session.stop":
                 reason = str(frame.payload.get("reason") or "upstream_stopped")
                 await self._stop_handler(reason)
@@ -53,6 +69,8 @@ class SessionMessageRouter(FrameProcessor):
 
 
 class SessionTransportAdapter:
+    """Wrap FastAPIWebsocketTransport with project-wide media defaults."""
+
     def __init__(self, websocket: WebSocket, serializer) -> None:
         self.websocket = websocket
         self.serializer = serializer

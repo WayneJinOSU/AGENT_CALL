@@ -1,3 +1,5 @@
+"""Provider 默认档案常量。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -5,6 +7,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class ProviderProfile:
+    """描述单个 provider 的默认模型/声线。"""
     provider: str
     model: str | None = None
     voice: str | None = None

@@ -1,3 +1,5 @@
+"""Pipecat Pipeline 装配工厂。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -19,6 +21,7 @@ from session.context import SessionContext
 
 @dataclass
 class PipelineResources:
+    """返回给 runner 的 pipeline 运行对象集合。"""
     task: PipelineTask
     context: LLMContext
 
@@ -33,6 +36,7 @@ def build_pipeline_task(
     tts_service,
     persistence_observer: RuntimePersistenceObserver,
 ) -> PipelineResources:
+    """根据 session 配置装配完整 PipelineTask。"""
     message_history = [
         {"role": "system", "content": session_context.start_payload.conversation.system_prompt},
         *session_context.start_payload.conversation.initial_messages,
@@ -46,6 +50,7 @@ def build_pipeline_task(
 
     pipeline = Pipeline(
         [
+            # 固定 V1 流水线顺序：input -> stt -> llm -> tts -> output。
             transport_adapter.transport.input(),
             router,
             stt_service,

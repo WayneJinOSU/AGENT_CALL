@@ -1,3 +1,10 @@
+"""北向 WebSocket 路由。
+
+约束：
+- 连接后的第一条文本消息必须是 session.start
+- 通过后把会话执行委托给 session.runner
+"""
+
 from __future__ import annotations
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -11,6 +18,7 @@ router = APIRouter()
 
 @router.websocket("/v1/outbound/session")
 async def outbound_session(websocket: WebSocket) -> None:
+    """单会话 WebSocket 入口。"""
     await websocket.accept()
     try:
         first_message = await websocket.receive_text()

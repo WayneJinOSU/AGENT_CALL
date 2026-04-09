@@ -1,3 +1,5 @@
+"""SQLAlchemy ORM 模型定义。"""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -7,14 +9,17 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
 class Base(DeclarativeBase):
+    """ORM 基类。"""
     pass
 
 
 def utcnow() -> datetime:
+    """统一 UTC 时间工厂。"""
     return datetime.now(UTC)
 
 
 class SessionRecord(Base):
+    """会话最终记录（每个 session 一行）。"""
     __tablename__ = "session_record"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -45,6 +50,7 @@ class SessionRecord(Base):
 
 
 class EventLog(Base):
+    """内部事件流水。"""
     __tablename__ = "event_log"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -65,6 +71,7 @@ class EventLog(Base):
 
 
 class SessionTurnMetrics(Base):
+    """逐轮 turn 指标。"""
     __tablename__ = "session_turn_metrics"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -89,6 +96,7 @@ class SessionTurnMetrics(Base):
 
 
 class SessionProviderMetrics(Base):
+    """按 capability 聚合的 provider 指标。"""
     __tablename__ = "session_provider_metrics"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -110,6 +118,7 @@ class SessionProviderMetrics(Base):
 
 
 class TranscriptLog(Base):
+    """转写与 assistant 文本日志。"""
     __tablename__ = "transcript_log"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)

@@ -1,3 +1,8 @@
+"""单会话执行器。
+
+负责把一个 WebSocket 会话完整走完：启动、运行、收口、落库。
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -41,6 +46,7 @@ registry = SessionRegistry()
 
 @dataclass
 class RuntimeResources:
+    """Runtime-scoped objects shared during one websocket session."""
     session_context: SessionContext
     state_machine: SessionStateMachine
     repositories: Repositories
@@ -49,6 +55,7 @@ class RuntimeResources:
 
 
 def create_runtime_context(websocket: WebSocket, start_message: SessionStartMessage) -> RuntimeResources:
+    """Allocate per-session context + infra handles used by run_session()."""
     session_context = SessionContext(
         session_id=f"sess_{uuid4().hex}",
         trace_id=f"trace_{uuid4().hex}",
@@ -70,6 +77,7 @@ def create_runtime_context(websocket: WebSocket, start_message: SessionStartMess
 
 
 def create_services(start_message: SessionStartMessage, metrics: RuntimeMetricsCollector):
+    """Resolve provider config from session.start and build Pipecat services."""
     provider_router = ProviderRouter()
     resolved = provider_router.resolve(start_message.payload.providers)
     metrics.register_provider("asr", resolved.asr_provider, resolved.asr_model)
@@ -83,10 +91,12 @@ def create_services(start_message: SessionStartMessage, metrics: RuntimeMetricsC
 
 
 def create_transport(websocket: WebSocket) -> SessionTransportAdapter:
+    """Create WS <-> Pipecat transport adapter."""
     return SessionTransportAdapter.create(websocket)
 
 
 async def finalize_session(resources: RuntimeResources) -> SessionFinalizedMessage:
+    """Flush final aggregates to DB and produce northbound session.finalized."""
     await resources.finalizer.finalize(
         session_context=resources.session_context,
         metrics=resources.metrics,
@@ -123,6 +133,7 @@ async def finalize_session(resources: RuntimeResources) -> SessionFinalizedMessa
 
 
 async def run_session(websocket: WebSocket, start_message: SessionStartMessage) -> None:
+    """Main lifecycle: init -> run pipeline -> finalize/failed -> cleanup."""
     resources = create_runtime_context(websocket, start_message)
     session_context = resources.session_context
     await registry.add(session_context)
@@ -143,8 +154,10 @@ async def run_session(websocket: WebSocket, start_message: SessionStartMessage) 
     silence_task = None
 
     async def request_stop(reason: str) -> None:
+        # Idempotent close gate: ignore repeated stop requests after terminal transitions.
         if session_context.status in {SessionStatus.HANGING_UP, SessionStatus.ENDED, SessionStatus.FAILED}:
             return
+        # Normalize free-form stop reasons into stable termination codes.
         if reason == TerminationCode.SILENCE_TIMEOUT.value:
             session_context.termination_code = TerminationCode.SILENCE_TIMEOUT
         elif reason == TerminationCode.MAX_DURATION_REACHED.value:
@@ -172,6 +185,7 @@ async def run_session(websocket: WebSocket, start_message: SessionStartMessage) 
             await task.queue_frame(EndFrame(reason=reason))
 
     async def on_input_activity(byte_count: int) -> None:
+        # Feed silence policy and final traffic metrics.
         resources.metrics.input_audio_bytes += byte_count
         session_context.metadata["last_input_at"] = utc_now_iso()
 
@@ -209,10 +223,12 @@ async def run_session(websocket: WebSocket, start_message: SessionStartMessage) 
         runner = PipelineRunner(handle_sigint=False)
 
         async def max_duration_guard() -> None:
+            # Hard cap: always terminate after max_session_duration_ms.
             await asyncio.sleep(start_message.payload.runtime.max_session_duration_ms / 1000)
             await request_stop(TerminationCode.MAX_DURATION_REACHED.value)
 
         async def silence_guard() -> None:
+            # Idle guard: terminate when no inbound audio activity for timeout window.
             timeout_seconds = start_message.payload.runtime.silence_timeout_ms / 1000
             while True:
                 await asyncio.sleep(timeout_seconds)
@@ -233,6 +249,7 @@ async def run_session(websocket: WebSocket, start_message: SessionStartMessage) 
         silence_task = asyncio.create_task(silence_guard())
         await ready_event.wait()
 
+        # READY means transport + providers + pipeline are fully initialized.
         resources.state_machine.transition(SessionStatus.READY)
         session_context.status = SessionStatus.READY
         session_context.ready_at = datetime.now(UTC)
@@ -268,6 +285,7 @@ async def run_session(websocket: WebSocket, start_message: SessionStartMessage) 
         await task.queue_frame(LLMRunFrame())
         await runner_task
 
+        # Serializer tracks raw audio bytes; copy values for final metrics aggregation.
         resources.metrics.input_audio_bytes = transport_adapter.serializer.input_audio_bytes
         resources.metrics.output_audio_bytes = transport_adapter.serializer.output_audio_bytes
 
@@ -282,6 +300,7 @@ async def run_session(websocket: WebSocket, start_message: SessionStartMessage) 
             finalized = await finalize_session(resources)
             await websocket.send_json(json_payload(finalized))
     except UnsupportedProviderError as exc:
+        # Provider unsupported/missing secret: fail fast with provider_error.
         session_context.status = SessionStatus.FAILED
         session_context.termination_code = TerminationCode.PROVIDER_ERROR
         session_context.ended_at = datetime.now(UTC)
@@ -306,6 +325,7 @@ async def run_session(websocket: WebSocket, start_message: SessionStartMessage) 
             )
         )
     except Exception as exc:
+        # Catch-all runtime error path.
         logging.exception("Session failed")
         session_context.status = SessionStatus.FAILED
         session_context.termination_code = session_context.termination_code or TerminationCode.RUNTIME_ERROR

@@ -1,3 +1,10 @@
+"""Pipecat Observer 桥接层。
+
+把 pipeline 中的关键帧转换为：
+- 实时存储写入（转写、turn 指标）
+- 内存指标聚合（TTFB、usage、latency）
+"""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -19,6 +26,8 @@ from storage.repositories import Repositories
 
 
 class RuntimePersistenceObserver(BaseObserver):
+    """将运行时帧事件持久化并更新 RuntimeMetricsCollector。"""
+
     def __init__(
         self,
         *,
@@ -35,11 +44,14 @@ class RuntimePersistenceObserver(BaseObserver):
         self._seen_frames: set[int] = set()
 
     async def on_pipeline_started(self) -> None:
+        """pipeline 就绪后通知 session.runner 发送 session.ready。"""
         self._ready_event.set()
 
     async def on_push_frame(self, data: FramePushed) -> None:
+        """按帧类型分发持久化/聚合逻辑。"""
         frame = data.frame
         if frame.id in self._seen_frames:
+            # 去重：同一 frame 只处理一次，避免重复写库。
             return
         self._seen_frames.add(frame.id)
 
@@ -105,6 +117,7 @@ class RuntimePersistenceObserver(BaseObserver):
             return
 
         if isinstance(frame, MetricsFrame):
+            # 统一把 Pipecat metrics 映射到 capability 维度。
             for item in frame.data:
                 processor_name = item.processor.lower()
                 capability = "llm"

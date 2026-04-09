@@ -1,3 +1,5 @@
+"""Session 上下文对象。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -12,6 +14,7 @@ from schemas.session import SessionStatus, TerminationCode
 
 @dataclass
 class SessionContext:
+    """单 websocket 会话的运行时状态快照。"""
     session_id: str
     trace_id: str
     websocket: WebSocket
@@ -27,6 +30,6 @@ class SessionContext:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def next_sequence(self) -> int:
+        """事件序号自增器。"""
         self.sequence += 1
         return self.sequence
-

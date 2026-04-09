@@ -1,3 +1,5 @@
+"""Session 相关 schema 与枚举。"""
+
 from __future__ import annotations
 
 from enum import Enum
@@ -7,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class SessionStatus(str, Enum):
+    """会话状态枚举。"""
     CREATED = "CREATED"
     READY = "READY"
     ACTIVE = "ACTIVE"
@@ -16,6 +19,7 @@ class SessionStatus(str, Enum):
 
 
 class TerminationCode(str, Enum):
+    """会话终止原因枚举。"""
     NORMAL_END = "normal_end"
     UPSTREAM_STOPPED = "upstream_stopped"
     PROVIDER_ERROR = "provider_error"
@@ -27,6 +31,7 @@ class TerminationCode(str, Enum):
 
 
 class ConversationConfig(BaseModel):
+    """会话文本上下文配置。"""
     model_config = ConfigDict(extra="ignore")
 
     language: str = "zh-CN"
@@ -35,6 +40,7 @@ class ConversationConfig(BaseModel):
 
 
 class MediaConfig(BaseModel):
+    """媒体约束（V1 固定 8k/mono/pcm_s16le）。"""
     model_config = ConfigDict(extra="ignore")
 
     encoding: str = "pcm_s16le"
@@ -44,6 +50,7 @@ class MediaConfig(BaseModel):
     @field_validator("encoding")
     @classmethod
     def validate_encoding(cls, value: str) -> str:
+        """仅允许 PCM16 编码。"""
         if value != "pcm_s16le":
             raise ValueError("V1 only supports pcm_s16le")
         return value
@@ -51,6 +58,7 @@ class MediaConfig(BaseModel):
     @field_validator("sample_rate")
     @classmethod
     def validate_sample_rate(cls, value: int) -> int:
+        """仅允许 8k 采样率。"""
         if value != 8000:
             raise ValueError("V1 only supports 8000 Hz")
         return value
@@ -58,12 +66,14 @@ class MediaConfig(BaseModel):
     @field_validator("channels")
     @classmethod
     def validate_channels(cls, value: int) -> int:
+        """仅允许单声道。"""
         if value != 1:
             raise ValueError("V1 only supports mono audio")
         return value
 
 
 class RuntimeConfig(BaseModel):
+    """会话运行时策略参数。"""
     model_config = ConfigDict(extra="ignore")
 
     barge_in: bool = True
@@ -72,6 +82,7 @@ class RuntimeConfig(BaseModel):
 
 
 class MetadataPayload(BaseModel):
+    """透传业务元数据（不参与业务语义判断）。"""
     model_config = ConfigDict(extra="allow")
 
     tenant_id: str | None = None

@@ -1,3 +1,5 @@
+"""会话收口器（Finalizer）。"""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -8,10 +10,13 @@ from storage.repositories import Repositories
 
 
 class Finalizer:
+    """负责会话结束后的聚合入库。"""
+
     def __init__(self, repositories: Repositories) -> None:
         self._repositories = repositories
 
     async def finalize(self, *, session_context: SessionContext, metrics: RuntimeMetricsCollector) -> None:
+        """写入 provider 聚合指标与 session 最终记录。"""
         ended_at = session_context.ended_at or datetime.now(UTC)
         provider_rows = []
         for snapshot in metrics.provider_metrics.values():

@@ -1,3 +1,11 @@
+"""北向控制消息协议工具。
+
+负责：
+- 解析 JSON 控制帧（session.start / session.stop）
+- 统一抛出协议层错误
+- 序列化下行消息
+"""
+
 from __future__ import annotations
 
 import json
@@ -16,10 +24,12 @@ from schemas.messages import (
 
 
 class ProtocolError(ValueError):
+    """协议格式错误。"""
     pass
 
 
 def parse_text_message(raw: str) -> SessionStartMessage | SessionStopMessage:
+    """将原始文本帧解析为结构化控制消息。"""
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as exc:
@@ -37,9 +47,10 @@ def parse_text_message(raw: str) -> SessionStartMessage | SessionStopMessage:
 
 
 def json_payload(message: SessionReadyMessage | SessionFailedMessage | SessionFinalizedMessage) -> dict[str, Any]:
+    """Pydantic 对象转为可下发 JSON dict。"""
     return message.model_dump(mode="json")
 
 
 def utc_now_iso() -> str:
+    """返回 UTC ISO 时间戳。"""
     return datetime.now(UTC).isoformat()
-

@@ -1,3 +1,5 @@
+"""Alembic 环境入口（异步引擎版）。"""
+
 from __future__ import annotations
 
 import asyncio
@@ -22,6 +24,7 @@ target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
+    """离线模式迁移。"""
     url = config.get_main_option("sqlalchemy.url")
     context.configure(
         url=url,
@@ -34,12 +37,14 @@ def run_migrations_offline() -> None:
 
 
 def _run_migrations_sync(connection) -> None:
+    """在线模式下的同步迁移执行体（由 run_sync 调用）。"""
     context.configure(connection=connection, target_metadata=target_metadata)
     with context.begin_transaction():
         context.run_migrations()
 
 
 async def _run_migrations_online() -> None:
+    """在线模式迁移（async engine）。"""
     connectable = async_engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
@@ -51,6 +56,7 @@ async def _run_migrations_online() -> None:
 
 
 def run_migrations_online() -> None:
+    """在线迁移入口。"""
     asyncio.run(_run_migrations_online())
 
 

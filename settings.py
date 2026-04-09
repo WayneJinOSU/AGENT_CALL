@@ -1,3 +1,8 @@
+"""全局配置中心。
+
+从环境变量读取运行参数，并在启动时构建只读 Settings 实例。
+"""
+
 from __future__ import annotations
 
 import os
@@ -11,6 +16,7 @@ load_dotenv()
 
 
 def _int_env(name: str, default: int) -> int:
+    """读取整数环境变量，解析失败回退到 default。"""
     raw = os.getenv(name)
     if raw is None or raw == "":
         return default
@@ -21,6 +27,12 @@ def _int_env(name: str, default: int) -> int:
 
 
 def build_database_url() -> str:
+    """按约定组装异步数据库连接串。
+
+    优先级：
+    1. 显式 DATABASE_URL
+    2. 由 DB_* 字段拼接
+    """
     explicit_url = os.getenv("DATABASE_URL")
     if explicit_url:
         return explicit_url
@@ -54,6 +66,8 @@ def build_database_url() -> str:
 
 @dataclass(frozen=True)
 class Settings:
+    """应用运行期只读配置。"""
+
     app_env: str = os.getenv("APP_ENV", "development")
     app_name: str = "AGENT_CALL"
     db_dialect: str = os.getenv("DB_DIALECT", "mysql")

@@ -1,3 +1,8 @@
+"""Provider 服务工厂。
+
+把 `session.start.providers` 中的配置转换为 Pipecat 原生 service 实例。
+"""
+
 from __future__ import annotations
 
 import os
@@ -15,15 +20,19 @@ from settings import settings
 
 
 class UnsupportedProviderError(ValueError):
+    """Raised when provider selection is invalid for current V1 support scope."""
     pass
 
 
 class PipecatServiceFactory:
+    """Factory that converts resolved provider config into concrete Pipecat services."""
+
     def create_services(
         self,
         *,
         providers: ResolvedProviders,
     ) -> tuple[FrameProcessor, FrameProcessor, FrameProcessor]:
+        # Build three capability services in a fixed order: ASR -> LLM -> TTS.
         asr = self._create_asr(
             providers.asr_provider,
             providers.asr_model,
@@ -44,6 +53,7 @@ class PipecatServiceFactory:
 
     @staticmethod
     def _option(options: dict[str, Any], *keys: str, default: Any = None) -> Any:
+        """Read first non-empty option from aliases, then fallback to default."""
         for key in keys:
             value = options.get(key)
             if value is not None and value != "":
@@ -56,6 +66,7 @@ class PipecatServiceFactory:
         env_names: tuple[str, ...],
         provider: str,
     ) -> str:
+        """Resolve secret from payload first, then from allowed env variable aliases."""
         if value:
             return value
         for env_name in env_names:
@@ -67,6 +78,7 @@ class PipecatServiceFactory:
 
     @staticmethod
     def _to_language(raw: str | None) -> Language | None:
+        """Map loose locale text (zh-CN / zh_cn / zh) to Pipecat Language enum."""
         if not raw:
             return None
         normalized = str(raw).strip().lower().replace("_", "-")
@@ -83,6 +95,7 @@ class PipecatServiceFactory:
         return None
 
     def _create_asr(self, provider: str, model: str | None, options: dict[str, Any]) -> FrameProcessor:
+        # V1 intentionally narrows ASR provider surface for predictable integration.
         if provider != "deepgram":
             raise UnsupportedProviderError(
                 f"ASR provider {provider!r} is not supported in V1. Use 'deepgram'."
@@ -124,6 +137,7 @@ class PipecatServiceFactory:
         model: str | None,
         options: dict[str, Any],
     ) -> FrameProcessor:
+        # OpenRouter is wired through OpenAI-compatible service adapter.
         if provider not in {"openai", "openrouter"}:
             raise UnsupportedProviderError(
                 f"LLM provider {provider!r} is not supported in V1. Use 'openrouter' or 'openai'."
@@ -137,6 +151,7 @@ class PipecatServiceFactory:
         voice: str | None,
         options: dict[str, Any],
     ) -> FrameProcessor:
+        # V1 keeps one TTS provider to reduce runtime variability.
         if provider != "cartesia":
             raise UnsupportedProviderError(
                 f"TTS provider {provider!r} is not supported in V1. Use 'cartesia'."
@@ -179,7 +194,9 @@ class PipecatServiceFactory:
         model: str | None,
         options: dict[str, Any],
     ) -> FrameProcessor:
+        """创建 OpenAI 协议兼容的 LLM service（openai/openrouter）。"""
         if provider == "openrouter":
+            # OpenRouter-specific headers are optional but useful for attribution/routing.
             api_key = self._required_secret_from_envs(
                 self._option(options, "api_key", "apiKey"),
                 ("OPENROUTER_API_KEY", "LLM_API_KEY"),
