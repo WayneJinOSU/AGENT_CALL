@@ -69,15 +69,6 @@ def create_runtime_context(websocket: WebSocket, start_message: SessionStartMess
     )
 
 
-def _bot_first_text(start_message: SessionStartMessage) -> str:
-    initial_messages = start_message.payload.conversation.initial_messages
-    if initial_messages:
-        first_content = initial_messages[0].get("content")
-        if isinstance(first_content, str) and first_content.strip():
-            return first_content.strip()
-    return "Hello, this is AGENT_CALL."
-
-
 def create_services(start_message: SessionStartMessage, metrics: RuntimeMetricsCollector):
     provider_router = ProviderRouter()
     resolved = provider_router.resolve(start_message.payload.providers)
@@ -87,7 +78,6 @@ def create_services(start_message: SessionStartMessage, metrics: RuntimeMetricsC
     factory = PipecatServiceFactory()
     stt_service, llm_service, tts_service = factory.create_services(
         providers=resolved,
-        text_supplier=lambda: _bot_first_text(start_message),
     )
     return resolved, stt_service, llm_service, tts_service
 

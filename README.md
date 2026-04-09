@@ -162,9 +162,26 @@ V1 默认采用 `bot-first` 模式：
       "channels": 1
     },
     "providers": {
-      "asr": {"provider": "tencent", "model": "default"},
-      "llm": {"provider": "volcengine", "model": "default"},
-      "tts": {"provider": "aliyun", "voice": "default"}
+      "asr": {
+        "provider": "deepgram",
+        "model": "nova-3-general",
+        "language": "zh",
+        "encoding": "linear16",
+        "sample_rate": 8000,
+        "channels": 1
+      },
+      "llm": {
+        "provider": "openrouter",
+        "model": "openai/gpt-4.1-mini"
+      },
+      "tts": {
+        "provider": "cartesia",
+        "model": "sonic-2",
+        "voice": "bf32f849-7bc9-4b91-8c62-954588efcc30",
+        "language": "zh-CN",
+        "encoding": "pcm_s16le",
+        "container": "raw"
+      }
     },
     "runtime": {
       "barge_in": true,
@@ -457,11 +474,13 @@ class ProviderRouter: ...
 - 若目标 provider 没有可直接复用的 Pipecat service，则由平台补最薄 custom adapter
 - provider 层只负责“创建谁”和“选择谁”，不负责北向协议适配
 
-V1 目标 provider 是“目标接入 provider”，不等于“默认已有原生实现”：
+V1 当前优先联调 provider 组合：
 
-- ASR：腾讯云
-- LLM：火山引擎
-- TTS：阿里云
+- ASR：Deepgram
+- LLM：OpenRouter（OpenAI 兼容）
+- TTS：Cartesia
+
+V1 已移除 `reference-*` provider。若传入非上述 provider，会收到 `session.failed`（`termination_code=provider_error`）。
 
 ### Transport 适配层
 
@@ -659,7 +678,7 @@ V1 的目录围绕 6 个核心边界收缩：
 - `schemas`：消息和配置契约
 
 ```text
-platform/
+AGENT_CALL/
   app.py
   gateway/
     websocket.py
@@ -695,3 +714,37 @@ platform/
 V1 的正确形态应该是：
 
 **外呼服务在电话接通后，通过一个 WebSocket 把实时音频接给 AGENT_CALL；AGENT_CALL 基于 Pipecat 完成整段 AI 会话，并在结束后入库，再返回 `session.finalized`。**
+
+## 本地联调检查清单
+
+### `.env` 最小配置
+
+```env
+DB_DIALECT=mysql
+DB_HOST=localhost
+DB_PORT=3306
+DB_USER=root
+DB_PASSWORD=your_mysql_password
+DB_NAME=AGENT_CALL
+DB_CHARSET=utf8mb4
+
+DEEPGRAM_API_KEY=...
+OPENROUTER_API_KEY=...
+CARTESIA_API_KEY=...
+CARTESIA_VOICE_ID=bf32f849-7bc9-4b91-8c62-954588efcc30
+```
+
+### 启动前置
+
+```bash
+./.venv/bin/alembic upgrade head
+./.venv/bin/python app.py
+```
+
+### 正常链路日志关键点
+
+- `DeepgramSTTService`
+- `OpenAILLMService`
+- `CartesiaTTSService`
+
+如果日志中没有上述 3 个服务名，优先检查 `session.start.providers` 是否传成了 `deepgram + openrouter + cartesia`。

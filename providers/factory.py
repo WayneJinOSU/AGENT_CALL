@@ -1,28 +1,9 @@
 from __future__ import annotations
 
-import math
 import os
-import struct
-from collections.abc import Callable
 from typing import Any
 
-from pipecat.frames.frames import (
-    BotStartedSpeakingFrame,
-    BotStoppedSpeakingFrame,
-    EndFrame,
-    Frame,
-    LLMFullResponseEndFrame,
-    LLMFullResponseStartFrame,
-    LLMRunFrame,
-    MetricsFrame,
-    StartFrame,
-    TextFrame,
-    TranscriptionFrame,
-    TTSSpeakFrame,
-    OutputAudioRawFrame,
-)
-from pipecat.metrics.metrics import LLMTokenUsage, LLMUsageMetricsData, ProcessingMetricsData, TTFBMetricsData, TTSUsageMetricsData
-from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+from pipecat.processors.frame_processor import FrameProcessor
 from pipecat.services.cartesia.tts import CartesiaTTSService
 from pipecat.services.deepgram.stt import DeepgramSTTService, LiveOptions
 from pipecat.services.openai.base_llm import BaseOpenAILLMService
@@ -31,102 +12,6 @@ from pipecat.transcriptions.language import Language
 
 from providers.router import ResolvedProviders
 from settings import settings
-
-
-class ReferenceSTTProcessor(FrameProcessor):
-    def __init__(self, *, model_name: str | None = None) -> None:
-        super().__init__(name="reference-stt")
-        self._model_name = model_name or "reference-stt"
-
-    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
-        await super().process_frame(frame, direction)
-        await self.push_frame(frame, direction)
-
-
-class ReferenceLLMProcessor(FrameProcessor):
-    def __init__(self, *, text_supplier: Callable[[], str], model_name: str | None = None) -> None:
-        super().__init__(name="reference-llm")
-        self._text_supplier = text_supplier
-        self._model_name = model_name or "reference-llm"
-
-    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
-        await super().process_frame(frame, direction)
-
-        if isinstance(frame, LLMRunFrame):
-            text = self._text_supplier()
-            await self.push_frame(
-                MetricsFrame(
-                    data=[
-                        TTFBMetricsData(processor=self.name, model=self._model_name, value=0.05),
-                        ProcessingMetricsData(processor=self.name, model=self._model_name, value=0.09),
-                        LLMUsageMetricsData(
-                            processor=self.name,
-                            model=self._model_name,
-                            value=LLMTokenUsage(prompt_tokens=8, completion_tokens=max(1, len(text) // 4), total_tokens=8 + max(1, len(text) // 4)),
-                        ),
-                    ]
-                ),
-                direction,
-            )
-            await self.push_frame(LLMFullResponseStartFrame(), direction)
-            await self.push_frame(TextFrame(text=text), direction)
-            await self.push_frame(LLMFullResponseEndFrame(), direction)
-            return
-
-        await self.push_frame(frame, direction)
-
-
-class ReferenceTTSProcessor(FrameProcessor):
-    def __init__(self, *, voice_name: str | None = None, sample_rate: int = 8000, channels: int = 1) -> None:
-        super().__init__(name="reference-tts")
-        self._voice_name = voice_name or "reference-voice"
-        self._sample_rate = sample_rate
-        self._channels = channels
-
-    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
-        await super().process_frame(frame, direction)
-
-        if isinstance(frame, TextFrame):
-            text = frame.text.strip() or settings.initial_bot_text
-            await self.push_frame(
-                MetricsFrame(
-                    data=[
-                        TTFBMetricsData(processor=self.name, model=self._voice_name, value=0.03),
-                        ProcessingMetricsData(processor=self.name, model=self._voice_name, value=0.06),
-                        TTSUsageMetricsData(processor=self.name, model=self._voice_name, value=len(text)),
-                    ]
-                ),
-                direction,
-            )
-            await self.push_frame(BotStartedSpeakingFrame(), direction)
-            await self.push_frame(
-                OutputAudioRawFrame(
-                    audio=self._synthesize_pcm(text),
-                    sample_rate=self._sample_rate,
-                    num_channels=self._channels,
-                ),
-                direction,
-            )
-            await self.push_frame(BotStoppedSpeakingFrame(), direction)
-            await self.push_frame(frame, direction)
-            return
-
-        if isinstance(frame, TTSSpeakFrame):
-            await self.process_frame(TextFrame(frame.text), direction)
-            return
-
-        await self.push_frame(frame, direction)
-
-    def _synthesize_pcm(self, text: str) -> bytes:
-        duration_seconds = max(0.25, min(1.8, len(text) * 0.03))
-        frame_count = int(self._sample_rate * duration_seconds)
-        amplitude = int(32767 * settings.output_wave_gain)
-        frequency = settings.output_wave_frequency_hz
-        buf = bytearray()
-        for index in range(frame_count):
-            sample = int(amplitude * math.sin(2 * math.pi * frequency * (index / self._sample_rate)))
-            buf.extend(struct.pack("<h", sample))
-        return bytes(buf)
 
 
 class UnsupportedProviderError(ValueError):
@@ -138,7 +23,6 @@ class PipecatServiceFactory:
         self,
         *,
         providers: ResolvedProviders,
-        text_supplier: Callable[[], str],
     ) -> tuple[FrameProcessor, FrameProcessor, FrameProcessor]:
         asr = self._create_asr(
             providers.asr_provider,
@@ -148,7 +32,6 @@ class PipecatServiceFactory:
         llm = self._create_llm(
             providers.llm_provider,
             providers.llm_model,
-            text_supplier,
             providers.llm_options,
         )
         tts = self._create_tts(
@@ -166,15 +49,6 @@ class PipecatServiceFactory:
             if value is not None and value != "":
                 return value
         return default
-
-    @staticmethod
-    def _required_secret(value: str | None, env_name: str, provider: str) -> str:
-        if value:
-            return value
-        env_value = os.getenv(env_name)
-        if env_value:
-            return env_value
-        raise UnsupportedProviderError(f"{provider} requires {env_name} or explicit api_key in provider config")
 
     @staticmethod
     def _required_secret_from_envs(
@@ -209,53 +83,52 @@ class PipecatServiceFactory:
         return None
 
     def _create_asr(self, provider: str, model: str | None, options: dict[str, Any]) -> FrameProcessor:
-        if provider == "reference":
-            return ReferenceSTTProcessor(model_name=model)
-        if provider == "deepgram":
-            api_key = self._required_secret_from_envs(
-                self._option(options, "api_key", "apiKey"),
-                ("DEEPGRAM_API_KEY", "ASR_API_KEY", "ARS_API_KEY"),
-                provider,
+        if provider != "deepgram":
+            raise UnsupportedProviderError(
+                f"ASR provider {provider!r} is not supported in V1. Use 'deepgram'."
             )
-            live_options = LiveOptions(
-                encoding=self._option(options, "encoding", default="linear16"),
-                language=self._option(options, "language", default="zh"),
-                model=model or self._option(options, "model", default="nova-3-general"),
-                channels=int(self._option(options, "channels", default=1)),
-                interim_results=bool(self._option(options, "interim_results", default=True)),
-                smart_format=bool(self._option(options, "smart_format", default=False)),
-                punctuate=bool(self._option(options, "punctuate", default=True)),
-                profanity_filter=bool(self._option(options, "profanity_filter", default=True)),
-                vad_events=bool(self._option(options, "vad_events", default=False)),
+        api_key = self._required_secret_from_envs(
+            self._option(options, "api_key", "apiKey"),
+            ("DEEPGRAM_API_KEY", "ASR_API_KEY", "ARS_API_KEY"),
+            provider,
+        )
+        live_options = LiveOptions(
+            encoding=self._option(options, "encoding", default="linear16"),
+            language=self._option(options, "language", default="zh"),
+            model=model or self._option(options, "model", default="nova-3-general"),
+            channels=int(self._option(options, "channels", default=1)),
+            interim_results=bool(self._option(options, "interim_results", default=True)),
+            smart_format=bool(self._option(options, "smart_format", default=False)),
+            punctuate=bool(self._option(options, "punctuate", default=True)),
+            profanity_filter=bool(self._option(options, "profanity_filter", default=True)),
+            vad_events=bool(self._option(options, "vad_events", default=False)),
+        )
+        sample_rate = int(
+            self._option(
+                options,
+                "sample_rate",
+                default=settings.default_audio_sample_rate,
             )
-            sample_rate = int(
-                self._option(
-                    options,
-                    "sample_rate",
-                    default=settings.default_audio_sample_rate,
-                )
-            )
-            base_url = self._option(options, "base_url", "url", default="")
-            return DeepgramSTTService(
-                api_key=api_key,
-                sample_rate=sample_rate,
-                live_options=live_options,
-                base_url=base_url,
-            )
-        raise UnsupportedProviderError(f"ASR provider {provider!r} is not implemented yet")
+        )
+        base_url = self._option(options, "base_url", "url", default="")
+        return DeepgramSTTService(
+            api_key=api_key,
+            sample_rate=sample_rate,
+            live_options=live_options,
+            base_url=base_url,
+        )
 
     def _create_llm(
         self,
         provider: str,
         model: str | None,
-        text_supplier: Callable[[], str],
         options: dict[str, Any],
     ) -> FrameProcessor:
-        if provider == "reference":
-            return ReferenceLLMProcessor(text_supplier=text_supplier, model_name=model)
-        if provider in {"openai", "openrouter"}:
-            return self._create_openai_compatible_llm(provider, model, options)
-        raise UnsupportedProviderError(f"LLM provider {provider!r} is not implemented yet")
+        if provider not in {"openai", "openrouter"}:
+            raise UnsupportedProviderError(
+                f"LLM provider {provider!r} is not supported in V1. Use 'openrouter' or 'openai'."
+            )
+        return self._create_openai_compatible_llm(provider, model, options)
 
     def _create_tts(
         self,
@@ -264,41 +137,41 @@ class PipecatServiceFactory:
         voice: str | None,
         options: dict[str, Any],
     ) -> FrameProcessor:
-        if provider == "reference":
-            return ReferenceTTSProcessor(voice_name=voice or model)
-        if provider == "cartesia":
-            api_key = self._required_secret_from_envs(
-                self._option(options, "api_key", "apiKey"),
-                ("CARTESIA_API_KEY", "TTS_API_KEY"),
-                provider,
+        if provider != "cartesia":
+            raise UnsupportedProviderError(
+                f"TTS provider {provider!r} is not supported in V1. Use 'cartesia'."
             )
-            voice_id = self._option(options, "voice_id", "voiceId", "voice", default=voice)
-            voice_id = self._required_secret_from_envs(
-                voice_id,
-                ("CARTESIA_VOICE_ID", "TTS_VOICE_ID", "VOICE_ID"),
-                provider,
+        api_key = self._required_secret_from_envs(
+            self._option(options, "api_key", "apiKey"),
+            ("CARTESIA_API_KEY", "TTS_API_KEY"),
+            provider,
+        )
+        voice_id = self._option(options, "voice_id", "voiceId", "voice", default=voice)
+        voice_id = self._required_secret_from_envs(
+            voice_id,
+            ("CARTESIA_VOICE_ID", "TTS_VOICE_ID", "VOICE_ID"),
+            provider,
+        )
+        sample_rate = int(
+            self._option(
+                options,
+                "sample_rate",
+                default=settings.default_audio_sample_rate,
             )
-            sample_rate = int(
-                self._option(
-                    options,
-                    "sample_rate",
-                    default=settings.default_audio_sample_rate,
-                )
-            )
-            language = self._to_language(self._option(options, "language"))
-            params = CartesiaTTSService.InputParams(language=language) if language else None
-            return CartesiaTTSService(
-                api_key=api_key,
-                voice_id=voice_id if voice_id else 'bf32f8497bc94b918c62954588efcc30',
-                model=model or self._option(options, "model", default="sonic-2"),
-                sample_rate=sample_rate,
-                encoding=self._option(options, "encoding", default="pcm_s16le"),
-                container=self._option(options, "container", default="raw"),
-                url=self._option(options, "url", default="wss://api.cartesia.ai/tts/websocket"),
-                cartesia_version=self._option(options, "cartesia_version", default="2025-04-16"),
-                params=params,
-            )
-        raise UnsupportedProviderError(f"TTS provider {provider!r} is not implemented yet")
+        )
+        language = self._to_language(self._option(options, "language"))
+        params = CartesiaTTSService.InputParams(language=language) if language else None
+        return CartesiaTTSService(
+            api_key=api_key,
+            voice_id=voice_id,
+            model=model or self._option(options, "model", default="sonic-2"),
+            sample_rate=sample_rate,
+            encoding=self._option(options, "encoding", default="pcm_s16le"),
+            container=self._option(options, "container", default="raw"),
+            url=self._option(options, "url", default="wss://api.cartesia.ai/tts/websocket"),
+            cartesia_version=self._option(options, "cartesia_version", default="2025-04-16"),
+            params=params,
+        )
 
     def _create_openai_compatible_llm(
         self,

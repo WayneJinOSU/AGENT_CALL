@@ -22,9 +22,9 @@ def _valid_start_message() -> dict:
                 "channels": 1,
             },
             "providers": {
-                "asr": {"provider": "reference"},
-                "llm": {"provider": "reference"},
-                "tts": {"provider": "reference"},
+                "asr": {"provider": "deepgram", "model": "nova-3-general"},
+                "llm": {"provider": "openrouter", "model": "openai/gpt-4.1-mini"},
+                "tts": {"provider": "cartesia", "model": "sonic-2", "voice": "v1"},
             },
             "runtime": {
                 "barge_in": True,
