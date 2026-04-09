@@ -308,8 +308,8 @@
                         payload: {
                             conversation: {
                                 language: "zh-CN",
-                                system_prompt: "You are a helpful assistant",
-                                initial_messages: [{"role": "user", "content": "你好"}]
+                                system_prompt: "你是一个专业、礼貌、简洁的电话客服助手。你的目标是先自我介绍，再确认客户是否方便沟通，并围绕客户问题给出明确答复。请始终保持客服语气，不要说自己是AI模型。",
+                                initial_messages: [{"role": "user", "content": "请以客服身份开始通话并先问候客户。"}]
                             },
                             media: { encoding: "pcm_s16le", sample_rate: 8000, channels: 1 },
                             providers: {
@@ -335,7 +335,7 @@
                                     container: "raw"
                                 }
                             },
-                            runtime: { barge_in: true, silence_timeout_ms: 60000, max_session_duration_ms: 180000 },
+                            runtime: { barge_in: true, silence_timeout_ms: 6000, max_session_duration_ms: 180000 },
                             metadata: { client: "html-web-client" }
                         }
                     };
