@@ -134,6 +134,7 @@ V1 默认采用 `bot-first` 模式：
 - runtime 初始化完成
 - 返回 `session.ready`
 - 立即触发首轮 bot 发言
+- 首轮 bot 发言完成前，用户输入默认静音（首句不可打断）
 
 因此 `session.ready` 的含义是：
 

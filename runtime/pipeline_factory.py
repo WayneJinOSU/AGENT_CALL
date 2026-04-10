@@ -11,8 +11,9 @@ from pipecat.observers.user_bot_latency_observer import UserBotLatencyObserver
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
-from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
+from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair, LLMUserAggregatorParams
 from pipecat.processors.audio.audio_buffer_processor import AudioBufferProcessor
+from pipecat.turns.user_mute import MuteUntilFirstBotCompleteUserMuteStrategy
 
 from runtime.observers import RuntimePersistenceObserver
 from runtime.processors import SilenceDetector, VoicemailDetector, WordAwareSanitizer
@@ -44,7 +45,11 @@ def build_pipeline_task(
         *session_context.start_payload.conversation.initial_messages,
     ]
     context = LLMContext(message_history)
-    user_aggregator, assistant_aggregator = LLMContextAggregatorPair(context)
+    user_params = LLMUserAggregatorParams()
+    if session_context.start_payload.runtime.barge_in:
+        # Keep global barge-in enabled, but protect the first bot speech from interruption.
+        user_params.user_mute_strategies.append(MuteUntilFirstBotCompleteUserMuteStrategy())
+    user_aggregator, assistant_aggregator = LLMContextAggregatorPair(context, user_params=user_params)
     voicemail_detector = VoicemailDetector(language=session_context.start_payload.conversation.language)
     hangup_sanitizer = WordAwareSanitizer()
     audio_buffer = AudioBufferProcessor(
