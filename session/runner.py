@@ -13,8 +13,9 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from fastapi import WebSocket
-from pipecat.frames.frames import EndFrame, LLMRunFrame
+from pipecat.frames.frames import EndFrame, LLMRunFrame, TTSSpeakFrame
 from pipecat.pipeline.runner import PipelineRunner
+from starlette.websockets import WebSocketState
 
 from gateway.protocol import json_payload, utc_now_iso
 from providers.factory import PipecatServiceFactory, UnsupportedProviderError
@@ -22,6 +23,7 @@ from providers.router import ProviderRouter
 from runtime.metrics import RuntimeMetricsCollector
 from runtime.observers import RuntimePersistenceObserver
 from runtime.pipeline_factory import build_pipeline_task
+from runtime.processors import SilenceDetector
 from runtime.transport import SessionMessageRouter, SessionTransportAdapter
 from schemas.event import EventType
 from schemas.messages import (
@@ -42,6 +44,38 @@ from storage.repositories import Repositories, create_repositories
 
 
 registry = SessionRegistry()
+
+
+def build_no_response_follow_up(language: str) -> str:
+    """Default short follow-up message used while waiting for the user."""
+    lang_code = language.split("-")[0].lower() if language else "zh"
+    if lang_code == "en":
+        return "Hi, are you still there?"
+    if lang_code == "es":
+        return "Hola, sigues ahi?"
+    return "您好，还在听吗？"
+
+
+def build_no_response_hangup_prompt(language: str) -> str:
+    """Ask the model to end the call naturally after repeated silence."""
+    lang_code = language.split("-")[0].lower() if language else "zh"
+    if lang_code == "en":
+        return (
+            "The user has not responded after repeated follow-ups. "
+            "Say one short closing sentence that checks if they are still there, "
+            "then politely end the call. The final word must be exactly 'goodbye'."
+        )
+    if lang_code == "es":
+        return (
+            "El usuario no ha respondido despues de varios intentos. "
+            "Di una sola frase breve para confirmar si sigue ahi y luego cierra la llamada "
+            "con cortesía. La ultima palabra debe ser exactamente 'chao'."
+        )
+    return (
+        "用户在多次追问后仍未回应。"
+        "请只说一句简短的话，先确认对方是否还在线，再礼貌结束通话。"
+        "最后两个字必须是“再见”。"
+    )
 
 
 @dataclass
@@ -151,7 +185,7 @@ async def run_session(websocket: WebSocket, start_message: SessionStartMessage) 
     task = None
     runner_task = None
     max_duration_task = None
-    silence_task = None
+    force_silence_hangup_task = None
 
     async def request_stop(reason: str) -> None:
         # Idempotent close gate: ignore repeated stop requests after terminal transitions.
@@ -184,10 +218,15 @@ async def run_session(websocket: WebSocket, start_message: SessionStartMessage) 
         if task:
             await task.queue_frame(EndFrame(reason=reason))
 
+    async def close_websocket_if_open(*, code: int, reason: str = "") -> None:
+        """Best-effort websocket close once runtime reaches terminal state."""
+        if websocket.client_state == WebSocketState.CONNECTED:
+            with contextlib.suppress(Exception):
+                await websocket.close(code=code, reason=reason)
+
     async def on_input_activity(byte_count: int) -> None:
-        # Feed silence policy and final traffic metrics.
+        # Feed traffic metrics; no-response policy is handled by SilenceDetector.
         resources.metrics.input_audio_bytes += byte_count
-        session_context.metadata["last_input_at"] = utc_now_iso()
 
     transport_adapter = create_transport(websocket)
     router = SessionMessageRouter(stop_handler=request_stop, input_activity_handler=on_input_activity)
@@ -210,10 +249,16 @@ async def run_session(websocket: WebSocket, start_message: SessionStartMessage) 
             metrics_collector=resources.metrics,
             ready_event=ready_event,
         )
+        silence_detector = SilenceDetector(
+            post_bot_grace_ms=start_message.payload.runtime.post_bot_grace_ms,
+            user_response_timeout_ms=start_message.payload.runtime.user_response_timeout_ms,
+            max_silence_follow_ups=start_message.payload.runtime.max_silence_follow_ups,
+        )
         pipeline_resources = build_pipeline_task(
             session_context=session_context,
             transport_adapter=transport_adapter,
             router=router,
+            silence_detector=silence_detector,
             stt_service=stt_service,
             llm_service=llm_service,
             tts_service=tts_service,
@@ -227,26 +272,52 @@ async def run_session(websocket: WebSocket, start_message: SessionStartMessage) 
             await asyncio.sleep(start_message.payload.runtime.max_session_duration_ms / 1000)
             await request_stop(TerminationCode.MAX_DURATION_REACHED.value)
 
-        async def silence_guard() -> None:
-            # Idle guard: terminate when no inbound audio activity for timeout window.
-            timeout_seconds = start_message.payload.runtime.silence_timeout_ms / 1000
-            while True:
-                await asyncio.sleep(timeout_seconds)
-                last_input_at_raw = session_context.metadata.get("last_input_at")
-                if not last_input_at_raw:
+        @silence_detector.event_handler("on_silence_detected")
+        async def _on_silence_detected(_, silence_count: int) -> None:
+            nonlocal force_silence_hangup_task
+            if session_context.status != SessionStatus.ACTIVE or not task:
+                return
+
+            language = start_message.payload.conversation.language
+            max_count = silence_detector.max_silence_follow_ups
+            logging.info(
+                "No-response detected: round=%s, max=%s, session_id=%s",
+                silence_count,
+                max_count,
+                session_context.session_id,
+            )
+            if silence_count >= max_count:
+                session_context.termination_code = TerminationCode.SILENCE_TIMEOUT
+                await silence_detector.disable()
+                pipeline_resources.context.add_message(
+                    {
+                        "role": "system",
+                        "content": build_no_response_hangup_prompt(language),
+                    }
+                )
+                await task.queue_frame(LLMRunFrame())
+
+                async def _force_hangup_if_needed() -> None:
+                    await asyncio.sleep(8)
                     if session_context.status == SessionStatus.ACTIVE:
                         await request_stop(TerminationCode.SILENCE_TIMEOUT.value)
-                        return
-                    continue
-                last_input_at = datetime.fromisoformat(last_input_at_raw)
-                idle_seconds = (datetime.now(UTC) - last_input_at).total_seconds()
-                if session_context.status == SessionStatus.ACTIVE and idle_seconds >= timeout_seconds:
-                    await request_stop(TerminationCode.SILENCE_TIMEOUT.value)
-                    return
+
+                if force_silence_hangup_task and not force_silence_hangup_task.done():
+                    force_silence_hangup_task.cancel()
+                force_silence_hangup_task = asyncio.create_task(_force_hangup_if_needed())
+                return
+
+            follow_up_message = build_no_response_follow_up(language)
+            logging.info(
+                "No-response follow-up queued: round=%s, max=%s, message=%r",
+                silence_count,
+                max_count,
+                follow_up_message,
+            )
+            await task.queue_frame(TTSSpeakFrame(follow_up_message, append_to_context=False))
 
         runner_task = asyncio.create_task(runner.run(task))
         max_duration_task = asyncio.create_task(max_duration_guard())
-        silence_task = asyncio.create_task(silence_guard())
         await ready_event.wait()
 
         # READY means transport + providers + pipeline are fully initialized.
@@ -299,6 +370,7 @@ async def run_session(websocket: WebSocket, start_message: SessionStartMessage) 
             session_context.ended_at = session_context.ended_at or datetime.now(UTC)
             finalized = await finalize_session(resources)
             await websocket.send_json(json_payload(finalized))
+            await close_websocket_if_open(code=1000, reason="session_finalized")
     except UnsupportedProviderError as exc:
         # Provider unsupported/missing secret: fail fast with provider_error.
         session_context.status = SessionStatus.FAILED
@@ -324,6 +396,7 @@ async def run_session(websocket: WebSocket, start_message: SessionStartMessage) 
                 )
             )
         )
+        await close_websocket_if_open(code=1011, reason="provider_error")
     except Exception as exc:
         # Catch-all runtime error path.
         logging.exception("Session failed")
@@ -353,12 +426,14 @@ async def run_session(websocket: WebSocket, start_message: SessionStartMessage) 
             )
         except RuntimeError:
             pass
+        await close_websocket_if_open(code=1011, reason="runtime_error")
     finally:
-        for pending in [max_duration_task, silence_task]:
+        for pending in [max_duration_task, force_silence_hangup_task]:
             if pending and not pending.done():
                 pending.cancel()
         if runner_task and not runner_task.done():
             runner_task.cancel()
             with contextlib.suppress(Exception):
                 await runner_task
+        await close_websocket_if_open(code=1000, reason="session_finished")
         await registry.remove(session_context.session_id)

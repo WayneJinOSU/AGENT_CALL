@@ -77,8 +77,10 @@ class RuntimeConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     barge_in: bool = True
-    silence_timeout_ms: int = 6000
-    max_session_duration_ms: int = 180000
+    post_bot_grace_ms: int = Field(default=2000, ge=0)
+    user_response_timeout_ms: int = Field(default=6000, ge=1)
+    max_silence_follow_ups: int = Field(default=3, ge=1)
+    max_session_duration_ms: int = Field(default=180000, ge=1)
 
 
 class MetadataPayload(BaseModel):

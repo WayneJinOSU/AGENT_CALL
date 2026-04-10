@@ -15,6 +15,7 @@ from pipecat.processors.aggregators.llm_response_universal import LLMContextAggr
 from pipecat.processors.audio.audio_buffer_processor import AudioBufferProcessor
 
 from runtime.observers import RuntimePersistenceObserver
+from runtime.processors import SilenceDetector, VoicemailDetector, WordAwareSanitizer
 from runtime.transport import SessionMessageRouter, SessionTransportAdapter
 from session.context import SessionContext
 
@@ -31,6 +32,7 @@ def build_pipeline_task(
     session_context: SessionContext,
     transport_adapter: SessionTransportAdapter,
     router: SessionMessageRouter,
+    silence_detector: SilenceDetector,
     stt_service,
     llm_service,
     tts_service,
@@ -43,6 +45,8 @@ def build_pipeline_task(
     ]
     context = LLMContext(message_history)
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(context)
+    voicemail_detector = VoicemailDetector(language=session_context.start_payload.conversation.language)
+    hangup_sanitizer = WordAwareSanitizer()
     audio_buffer = AudioBufferProcessor(
         sample_rate=session_context.start_payload.media.sample_rate,
         num_channels=session_context.start_payload.media.channels,
@@ -50,12 +54,16 @@ def build_pipeline_task(
 
     pipeline = Pipeline(
         [
-            # 固定 V1 流水线顺序：input -> stt -> llm -> tts -> output。
+            # 固定 V1 主链路：input -> stt -> llm -> tts -> output。
+            # 在 STT/LLM 与 LLM/TTS 之间插入文本级控制处理器。
             transport_adapter.transport.input(),
             router,
+            silence_detector,
             stt_service,
+            voicemail_detector,
             user_aggregator,
             llm_service,
+            hangup_sanitizer,
             tts_service,
             transport_adapter.transport.output(),
             assistant_aggregator,

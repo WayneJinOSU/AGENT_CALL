@@ -28,7 +28,9 @@ def _valid_start_message() -> dict:
             },
             "runtime": {
                 "barge_in": True,
-                "silence_timeout_ms": 6000,
+                "post_bot_grace_ms": 2000,
+                "user_response_timeout_ms": 6000,
+                "max_silence_follow_ups": 3,
                 "max_session_duration_ms": 180000,
             },
             "metadata": {},
