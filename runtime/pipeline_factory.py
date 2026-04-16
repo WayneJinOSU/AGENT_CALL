@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from loguru import logger
+from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADAnalyzer, VADParams
 from pipecat.observers.loggers.metrics_log_observer import MetricsLogObserver
@@ -16,14 +17,17 @@ from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair, LLMUserAggregatorParams
 from pipecat.processors.audio.audio_buffer_processor import AudioBufferProcessor
+from pipecat.turns.user_stop import TurnAnalyzerUserTurnStopStrategy
 from pipecat.turns.user_mute import (
     AlwaysUserMuteStrategy,
     FunctionCallUserMuteStrategy,
     MuteUntilFirstBotCompleteUserMuteStrategy,
 )
+from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 from runtime.observers import RuntimePersistenceObserver
-from runtime.processors import SilenceDetector, VoicemailDetector, WordAwareSanitizer
+from runtime.processors import EmergencyInterruptProcessor, SilenceDetector, VoicemailDetector, WordAwareSanitizer
+from runtime.turn_strategies import LoggingMinWordsUserTurnStartStrategy
 from runtime.transport import SessionMessageRouter, SessionTransportAdapter
 from session.context import SessionContext
 
@@ -31,6 +35,7 @@ INTERRUPTIBLE_VAD_STOP_SECS = 0.5
 NON_INTERRUPTIBLE_VAD_STOP_SECS = 1.0
 INTERRUPTIBLE_USER_TURN_STOP_TIMEOUT_SECS = 2.0
 NON_INTERRUPTIBLE_USER_TURN_STOP_TIMEOUT_SECS = 5.0
+MIN_WORDS_BARGE_IN_THRESHOLD = 2
 
 
 @dataclass
@@ -39,6 +44,8 @@ class PipelineResources:
     task: PipelineTask
     context: LLMContext
     hangup_sanitizer: WordAwareSanitizer
+    user_aggregator: object
+    assistant_aggregator: object
 
 
 def _build_vad_analyzer(*, sample_rate: int, allow_interruptions: bool) -> VADAnalyzer | None:
@@ -71,6 +78,19 @@ def build_user_aggregator_params(*, allow_interruptions: bool, sample_rate: int)
         user_turn_stop_timeout = NON_INTERRUPTIBLE_USER_TURN_STOP_TIMEOUT_SECS
 
     return LLMUserAggregatorParams(
+        user_turn_strategies=UserTurnStrategies(
+            start=[
+                LoggingMinWordsUserTurnStartStrategy(
+                    min_words=MIN_WORDS_BARGE_IN_THRESHOLD,
+                    use_interim=True,
+                )
+            ],
+            stop=[
+                TurnAnalyzerUserTurnStopStrategy(
+                    turn_analyzer=LocalSmartTurnAnalyzerV3()
+                )
+            ],
+        ),
         user_mute_strategies=mute_strategies,
         user_turn_stop_timeout=user_turn_stop_timeout,
         vad_analyzer=_build_vad_analyzer(
@@ -90,6 +110,7 @@ def build_pipeline_task(
     llm_service,
     tts_service,
     persistence_observer: RuntimePersistenceObserver,
+    interrupt_handler,
 ) -> PipelineResources:
     """根据 session 配置装配完整 PipelineTask。"""
     message_history = [
@@ -103,6 +124,7 @@ def build_pipeline_task(
     )
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(context, user_params=user_params)
     voicemail_detector = VoicemailDetector(language=session_context.start_payload.conversation.language)
+    emergency_interrupt = EmergencyInterruptProcessor(interrupt_handler=interrupt_handler)
     hangup_sanitizer = WordAwareSanitizer()
     audio_buffer = AudioBufferProcessor(
         sample_rate=session_context.start_payload.media.sample_rate,
@@ -117,6 +139,7 @@ def build_pipeline_task(
             router,
             silence_detector,
             stt_service,
+            emergency_interrupt,
             voicemail_detector,
             user_aggregator,
             llm_service,
@@ -147,4 +170,10 @@ def build_pipeline_task(
             StartupTimingObserver(),
         ],
     )
-    return PipelineResources(task=task, context=context, hangup_sanitizer=hangup_sanitizer)
+    return PipelineResources(
+        task=task,
+        context=context,
+        hangup_sanitizer=hangup_sanitizer,
+        user_aggregator=user_aggregator,
+        assistant_aggregator=assistant_aggregator,
+    )

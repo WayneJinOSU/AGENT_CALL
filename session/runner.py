@@ -9,12 +9,14 @@ import asyncio
 import contextlib
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 from uuid import uuid4
 
 from fastapi import WebSocket
 from loguru import logger
-from pipecat.frames.frames import EndFrame, LLMRunFrame, TTSSpeakFrame
+from pipecat.frames.frames import EndFrame, LLMRunFrame, StartInterruptionFrame, TTSSpeakFrame
 from pipecat.pipeline.runner import PipelineRunner
+from pipecat.processors.aggregators.llm_response_universal import AssistantTurnStoppedMessage, UserTurnStoppedMessage
 from starlette.websockets import WebSocketState
 
 from gateway.protocol import json_payload, utc_now_iso
@@ -44,6 +46,12 @@ from storage.repositories import Repositories, create_repositories
 
 
 registry = SessionRegistry()
+
+USER_TURN_STARTED_EVENT = "turn.user.started"
+USER_TURN_STOPPED_EVENT = "turn.user.stopped"
+USER_TURN_STOP_TIMEOUT_EVENT = "turn.user.stop_timeout"
+ASSISTANT_TURN_STOPPED_EVENT = "turn.assistant.stopped"
+USER_EMERGENCY_INTERRUPT_EVENT = "turn.user.emergency_interrupt"
 
 
 def build_no_response_follow_up(language: str) -> str:
@@ -249,8 +257,32 @@ async def run_session(websocket: WebSocket, start_message: SessionStartMessage) 
         # Feed traffic metrics; no-response policy is handled by SilenceDetector.
         resources.metrics.input_audio_bytes += byte_count
 
+    async def request_interrupt(payload: dict[str, Any] | None = None) -> None:
+        details = payload or {}
+        if session_context.status != SessionStatus.ACTIVE or not task:
+            logger.info(
+                "request_interrupt ignored: status={} task_present={} session_id={} payload={}",
+                session_context.status,
+                bool(task),
+                session_context.session_id,
+                details,
+            )
+            return
+        logger.info("request_interrupt accepted: session_id={} payload={}", session_context.session_id, details)
+        await resources.repositories.events.append(
+            session_id=session_context.session_id,
+            sequence=session_context.next_sequence(),
+            event_type=USER_EMERGENCY_INTERRUPT_EVENT,
+            source="interrupt",
+            payload=details,
+        )
+        await task.queue_frame(StartInterruptionFrame())
+
     transport_adapter = create_transport(websocket)
-    router = SessionMessageRouter(stop_handler=request_stop, input_activity_handler=on_input_activity)
+    router = SessionMessageRouter(
+        stop_handler=request_stop,
+        input_activity_handler=on_input_activity,
+    )
 
     if hasattr(transport_adapter.transport, "event_handler"):
         @transport_adapter.transport.event_handler("on_client_disconnected")
@@ -293,9 +325,74 @@ async def run_session(websocket: WebSocket, start_message: SessionStartMessage) 
             llm_service=llm_service,
             tts_service=tts_service,
             persistence_observer=observer,
+            interrupt_handler=request_interrupt,
         )
         task = pipeline_resources.task
         runner = PipelineRunner(handle_sigint=False)
+
+        @pipeline_resources.user_aggregator.event_handler("on_user_turn_started")
+        async def _on_user_turn_started(_, strategy) -> None:
+            strategy_name = strategy.__class__.__name__
+            logger.info(
+                "Turn event: on_user_turn_started strategy={} session_id={}",
+                strategy_name,
+                session_context.session_id,
+            )
+            await resources.repositories.events.append(
+                session_id=session_context.session_id,
+                sequence=session_context.next_sequence(),
+                event_type=USER_TURN_STARTED_EVENT,
+                source="turn_logger",
+                payload={"strategy": strategy_name},
+            )
+
+        @pipeline_resources.user_aggregator.event_handler("on_user_turn_stopped")
+        async def _on_user_turn_stopped(_, strategy, message: UserTurnStoppedMessage) -> None:
+            strategy_name = strategy.__class__.__name__
+            logger.info(
+                "Turn event: on_user_turn_stopped strategy={} transcript={!r} session_id={}",
+                strategy_name,
+                message.content,
+                session_context.session_id,
+            )
+            await resources.repositories.events.append(
+                session_id=session_context.session_id,
+                sequence=session_context.next_sequence(),
+                event_type=USER_TURN_STOPPED_EVENT,
+                source="turn_logger",
+                payload={
+                    "strategy": strategy_name,
+                    "transcript": message.content,
+                    "timestamp": message.timestamp,
+                    "user_id": message.user_id,
+                },
+            )
+
+        @pipeline_resources.user_aggregator.event_handler("on_user_turn_stop_timeout")
+        async def _on_user_turn_stop_timeout(_) -> None:
+            logger.info("Turn event: on_user_turn_stop_timeout session_id={}", session_context.session_id)
+            await resources.repositories.events.append(
+                session_id=session_context.session_id,
+                sequence=session_context.next_sequence(),
+                event_type=USER_TURN_STOP_TIMEOUT_EVENT,
+                source="turn_logger",
+                payload=None,
+            )
+
+        @pipeline_resources.assistant_aggregator.event_handler("on_assistant_turn_stopped")
+        async def _on_assistant_turn_stopped(_, message: AssistantTurnStoppedMessage) -> None:
+            logger.info(
+                "Turn event: on_assistant_turn_stopped transcript={!r} session_id={}",
+                message.content,
+                session_context.session_id,
+            )
+            await resources.repositories.events.append(
+                session_id=session_context.session_id,
+                sequence=session_context.next_sequence(),
+                event_type=ASSISTANT_TURN_STOPPED_EVENT,
+                source="turn_logger",
+                payload={"transcript": message.content, "timestamp": message.timestamp},
+            )
 
         async def max_duration_guard() -> None:
             # Hard cap: always terminate after max_session_duration_ms.

@@ -85,6 +85,11 @@
             gap: 16px;
         }
 
+        .config-stack {
+            display: grid;
+            gap: 16px;
+        }
+
         .config-copy strong {
             display: block;
             font-size: 1rem;
@@ -112,6 +117,45 @@
             height: 18px;
             accent-color: var(--accent);
             cursor: pointer;
+        }
+
+        .field-grid {
+            display: grid;
+            gap: 16px;
+        }
+
+        .field-group {
+            display: grid;
+            gap: 8px;
+        }
+
+        .field-group label {
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: var(--text-main);
+        }
+
+        .field-group select,
+        .field-group textarea {
+            width: 100%;
+            border-radius: 12px;
+            border: 1px solid var(--glass-border);
+            background: rgba(15, 23, 42, 0.7);
+            color: var(--text-main);
+            padding: 12px 14px;
+            font: inherit;
+        }
+
+        .field-group textarea {
+            min-height: 100px;
+            resize: vertical;
+            line-height: 1.5;
+        }
+
+        .field-group select:focus,
+        .field-group textarea:focus {
+            outline: 2px solid rgba(56, 189, 248, 0.4);
+            border-color: rgba(56, 189, 248, 0.6);
         }
 
         button {
@@ -213,15 +257,37 @@
         </div>
 
         <div class="config-panel">
-            <div class="config-item">
-                <div class="config-copy">
-                    <strong>请求参数</strong>
-                    <p>控制本次 `session.start` 是否允许用户在机器人播报期间插话打断。该选项会写入 `payload.runtime.barge_in`。</p>
+            <div class="config-stack">
+                <div class="config-item">
+                    <div class="config-copy">
+                        <strong>请求参数</strong>
+                        <p>可以切换中英参数预设，并直接改写 system prompt 与开场 user message，方便做 prompt 工程测试。</p>
+                    </div>
+                    <label class="toggle" for="interruptionsToggle">
+                        <input type="checkbox" id="interruptionsToggle" checked>
+                        <span>允许打断</span>
+                    </label>
                 </div>
-                <label class="toggle" for="interruptionsToggle">
-                    <input type="checkbox" id="interruptionsToggle" checked>
-                    <span>允许打断</span>
-                </label>
+
+                <div class="field-grid">
+                    <div class="field-group">
+                        <label for="presetSelect">参数预设</label>
+                        <select id="presetSelect">
+                            <option value="zh-support">中文客服测试</option>
+                            <option value="en-support">English Support Test</option>
+                        </select>
+                    </div>
+
+                    <div class="field-group">
+                        <label for="systemPromptInput">System Prompt</label>
+                        <textarea id="systemPromptInput"></textarea>
+                    </div>
+
+                    <div class="field-group">
+                        <label for="initialUserMessageInput">Initial User Message</label>
+                        <textarea id="initialUserMessageInput"></textarea>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -234,6 +300,9 @@
         const logsDiv = document.getElementById('logs');
         const statusDot = document.getElementById('statusDot');
         const interruptionsToggle = document.getElementById('interruptionsToggle');
+        const presetSelect = document.getElementById('presetSelect');
+        const systemPromptInput = document.getElementById('systemPromptInput');
+        const initialUserMessageInput = document.getElementById('initialUserMessageInput');
 
         let ws = null;
         let audioCtx = null;
@@ -241,6 +310,25 @@
         let scriptNode = null;
         let nextPlayTime = 0;
         let sessionReady = false;
+
+        const SESSION_PRESETS = {
+            "zh-support": {
+                label: "中文客服测试",
+                conversationLanguage: "zh-CN",
+                sttLanguage: "zh",
+                ttsLanguage: "zh-CN",
+                systemPrompt: "你是一个专业、礼貌、简洁的电话客服助手。你的目标是先自我介绍，再确认客户是否方便沟通，并围绕客户问题给出明确答复。请始终保持客服语气，不要说自己是AI模型。",
+                initialUserMessage: "请以客服身份开始通话并先问候客户。"
+            },
+            "en-support": {
+                label: "English Support Test",
+                conversationLanguage: "en-US",
+                sttLanguage: "en",
+                ttsLanguage: "en-US",
+                systemPrompt: "You are a professional, concise, and courteous phone support agent. Start with a brief introduction, confirm whether this is a good time to talk, and then help the customer efficiently. Stay in a real support-agent tone and never say you are an AI model.",
+                initialUserMessage: "Start the call as a phone support agent, greet the customer, and ask whether this is a good time to talk."
+            }
+        };
 
         function log(msg, type = 'info') {
             const entry = document.createElement('div');
@@ -345,6 +433,73 @@
             return 'req_' + Math.random().toString(36).substring(2, 9);
         }
 
+        function applyPreset(presetKey) {
+            const preset = SESSION_PRESETS[presetKey];
+            if (!preset) return;
+            systemPromptInput.value = preset.systemPrompt;
+            initialUserMessageInput.value = preset.initialUserMessage;
+        }
+
+        function buildStartMessage() {
+            const preset = SESSION_PRESETS[presetSelect.value] || SESSION_PRESETS["zh-support"];
+            return {
+                type: "session.start",
+                request_id: generateReqId(),
+                payload: {
+                    conversation: {
+                        language: preset.conversationLanguage,
+                        system_prompt: systemPromptInput.value.trim() || preset.systemPrompt,
+                        initial_messages: [{
+                            role: "user",
+                            content: initialUserMessageInput.value.trim() || preset.initialUserMessage
+                        }]
+                    },
+                    media: { encoding: "pcm_s16le", sample_rate: 8000, channels: 1 },
+                    providers: {
+                        asr: {
+                            provider: "deepgram",
+                            model: "nova-3-general",
+                            language: preset.sttLanguage,
+                            encoding: "linear16",
+                            sample_rate: 8000,
+                            channels: 1,
+                            interim_results: true
+                        },
+                        llm: {
+                            provider: "openrouter",
+                            model: "openai/gpt-4o"
+                        },
+                        tts: {
+                            provider: "cartesia",
+                            model: "sonic-2",
+                            voice: "bf32f849-7bc9-4b91-8c62-954588efcc30",
+                            language: preset.ttsLanguage,
+                            encoding: "pcm_s16le",
+                            container: "raw"
+                        }
+                    },
+                    runtime: {
+                        barge_in: interruptionsToggle.checked,
+                        post_bot_grace_ms: 2000,
+                        user_response_timeout_ms: 6000,
+                        max_silence_follow_ups: 3,
+                        max_session_duration_ms: 180000
+                    },
+                    metadata: {
+                        client: "html-web-client",
+                        preset: presetSelect.value
+                    }
+                }
+            };
+        }
+
+        presetSelect.addEventListener('change', () => {
+            applyPreset(presetSelect.value);
+            log(`🧪 已切换测试预设: ${SESSION_PRESETS[presetSelect.value].label}`, 'info');
+        });
+
+        applyPreset(presetSelect.value);
+
         connectBtn.addEventListener('click', async () => {
             try {
                 connectBtn.disabled = true;
@@ -359,53 +514,13 @@
                     disconnectBtn.disabled = false;
                     log('✅ WebSocket 连接成功！正在下发参数协议包...', 'info');
                     
-                    // 下发我们在项目中确立的标准开局载荷 (SessionStartMessage)
-                    const startMessage = {
-                        type: "session.start",
-                        request_id: generateReqId(),
-                        payload: {
-                            conversation: {
-                                language: "zh-CN",
-                                system_prompt: "你是一个专业、礼貌、简洁的电话客服助手。你的目标是先自我介绍，再确认客户是否方便沟通，并围绕客户问题给出明确答复。请始终保持客服语气，不要说自己是AI模型。",
-                                initial_messages: [{"role": "user", "content": "请以客服身份开始通话并先问候客户。"}]
-                            },
-                            media: { encoding: "pcm_s16le", sample_rate: 8000, channels: 1 },
-                            providers: {
-                                asr: {
-                                    provider: "deepgram",
-                                    model: "nova-3-general",
-                                    language: "zh",
-                                    encoding: "linear16",
-                                    sample_rate: 8000,
-                                    channels: 1,
-                                    interim_results: true
-                                },
-                                llm: {
-                                    provider: "openrouter",
-                                    model: "openai/gpt-4o"
-                                },
-                                tts: {
-                                    provider: "cartesia",
-                                    model: "sonic-2",
-                                    voice: "bf32f849-7bc9-4b91-8c62-954588efcc30",
-                                    language: "zh-CN",
-                                    encoding: "pcm_s16le",
-                                    container: "raw"
-                                }
-                            },
-                            runtime: {
-                                barge_in: interruptionsToggle.checked,
-                                post_bot_grace_ms: 2000,
-                                user_response_timeout_ms: 6000,
-                                max_silence_follow_ups: 3,
-                                max_session_duration_ms: 180000
-                            },
-                            metadata: { client: "html-web-client" }
-                        }
-                    };
+                    const startMessage = buildStartMessage();
                     
                     ws.send(JSON.stringify(startMessage));
-                    log(`>> 发送控制帧: [session.start] runtime.barge_in=${startMessage.payload.runtime.barge_in}`, 'send');
+                    log(
+                        `>> 发送控制帧: [session.start] preset=${startMessage.payload.metadata.preset} language=${startMessage.payload.conversation.language} runtime.barge_in=${startMessage.payload.runtime.barge_in}`,
+                        'send'
+                    );
                 };
 
                 ws.onmessage = (event) => {
