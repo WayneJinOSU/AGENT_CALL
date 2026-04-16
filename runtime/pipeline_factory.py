@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 
+from loguru import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADAnalyzer, VADParams
 from pipecat.observers.loggers.metrics_log_observer import MetricsLogObserver
@@ -27,8 +27,6 @@ from runtime.processors import SilenceDetector, VoicemailDetector, WordAwareSani
 from runtime.transport import SessionMessageRouter, SessionTransportAdapter
 from session.context import SessionContext
 
-logger = logging.getLogger(__name__)
-
 INTERRUPTIBLE_VAD_STOP_SECS = 0.5
 NON_INTERRUPTIBLE_VAD_STOP_SECS = 1.0
 INTERRUPTIBLE_USER_TURN_STOP_TIMEOUT_SECS = 2.0
@@ -40,6 +38,7 @@ class PipelineResources:
     """返回给 runner 的 pipeline 运行对象集合。"""
     task: PipelineTask
     context: LLMContext
+    hangup_sanitizer: WordAwareSanitizer
 
 
 def _build_vad_analyzer(*, sample_rate: int, allow_interruptions: bool) -> VADAnalyzer | None:
@@ -51,7 +50,7 @@ def _build_vad_analyzer(*, sample_rate: int, allow_interruptions: bool) -> VADAn
             params=VADParams(stop_secs=stop_secs),
         )
     except Exception as exc:  # pragma: no cover - defensive fallback for optional runtime deps
-        logger.warning("Failed to initialize Silero VAD analyzer, falling back to transcription-only turns: %s", exc)
+        logger.warning("Failed to initialize Silero VAD analyzer, falling back to transcription-only turns: {}", exc)
         return None
 
 
@@ -148,4 +147,4 @@ def build_pipeline_task(
             StartupTimingObserver(),
         ],
     )
-    return PipelineResources(task=task, context=context)
+    return PipelineResources(task=task, context=context, hangup_sanitizer=hangup_sanitizer)

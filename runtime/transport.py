@@ -8,12 +8,12 @@
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 from fastapi import WebSocket
+from loguru import logger
 from pipecat.frames.frames import Frame, InputAudioRawFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams, FastAPIWebsocketTransport
@@ -59,7 +59,7 @@ class SessionMessageRouter(FrameProcessor):
                 reason = str(frame.payload.get("reason") or "upstream_stopped")
                 await self._stop_handler(reason)
                 return
-            logging.debug("Ignoring unexpected control frame type=%s", frame.message_type)
+            logger.debug("Ignoring unexpected control frame type={}", frame.message_type)
             return
 
         if isinstance(frame, InputAudioRawFrame) and self._input_activity_handler:

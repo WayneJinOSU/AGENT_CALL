@@ -29,6 +29,7 @@ class WordAwareSanitizer(FrameProcessor):
         self._debug_stream = debug_stream
         self._is_hanging_up = False
         self._is_ended = False
+        self._register_event_handler("on_hangup_started", sync=True)
         self._endcall_regex = re.compile(
             r"(?i)("
             r"\b(?:goodbye|bye|bye-bye|see you|have a great day|have a good one)\b|"
@@ -71,10 +72,13 @@ class WordAwareSanitizer(FrameProcessor):
                     )
                 if self._endcall_regex.search(check_text) or self._COMPACT_ENDCALL_REGEX.search(compact_text):
                     logger.info(
-                        "[WordAwareSanitizer] Detected end phrase from {}; start hangup sequence.",
+                        "[WordAwareSanitizer] Detected end phrase from {}; text_tail={!r}; compact_tail={!r}; start hangup sequence.",
                         type(frame).__name__,
+                        check_text[-120:],
+                        compact_text[-120:],
                     )
                     self._is_hanging_up = True
+                    await self._call_event_handler("on_hangup_started")
                     self.create_task(self._perform_hangup_sequence(direction), "hangup_sequence")
             await self.push_frame(frame, direction)
             return

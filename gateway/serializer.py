@@ -8,9 +8,9 @@ from __future__ import annotations
 import audioop
 import hashlib
 import json
-import logging
 from time import perf_counter
 
+from loguru import logger
 from pipecat.frames.frames import AudioRawFrame, Frame, InputAudioRawFrame, OutputAudioRawFrame, StartFrame
 from pipecat.serializers.base_serializer import FrameSerializer
 
@@ -90,9 +90,9 @@ class SessionProtocolFrameSerializer(FrameSerializer):
             if media_type:
                 self._filter_drop_count += 1
                 elapsed_ms = (perf_counter() - started) * 1000
-                logging.warning(
+                logger.warning(
                     "SessionProtocolFrameSerializer dropped non-PCM payload "
-                    "signature=%s size=%s filter_ms=%.3f %s",
+                    "signature={} size={} filter_ms={:.3f} {}",
                     media_type,
                     len(audio),
                     elapsed_ms,
@@ -102,9 +102,9 @@ class SessionProtocolFrameSerializer(FrameSerializer):
             if not self._is_valid_pcm16_frame(audio):
                 self._filter_drop_count += 1
                 elapsed_ms = (perf_counter() - started) * 1000
-                logging.warning(
+                logger.warning(
                     "SessionProtocolFrameSerializer dropped invalid PCM payload "
-                    "size=%s channels=%s filter_ms=%.3f %s",
+                    "size={} channels={} filter_ms={:.3f} {}",
                     len(audio),
                     self.channels,
                     elapsed_ms,
@@ -128,7 +128,7 @@ class SessionProtocolFrameSerializer(FrameSerializer):
             # Text path: only control protocol messages are accepted.
             message = parse_text_message(data)
         except ProtocolError as exc:
-            logging.warning("SessionProtocolFrameSerializer ignored invalid text frame: %s", exc)
+            logger.warning("SessionProtocolFrameSerializer ignored invalid text frame: {}", exc)
             return None
 
         return SessionControlFrame(

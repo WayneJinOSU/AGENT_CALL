@@ -7,12 +7,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import uuid4
 
 from fastapi import WebSocket
+from loguru import logger
 from pipecat.frames.frames import EndFrame, LLMRunFrame, TTSSpeakFrame
 from pipecat.pipeline.runner import PipelineRunner
 from starlette.websockets import WebSocketState
@@ -190,7 +190,21 @@ async def run_session(websocket: WebSocket, start_message: SessionStartMessage) 
     async def request_stop(reason: str) -> None:
         # Idempotent close gate: ignore repeated stop requests after terminal transitions.
         if session_context.status in {SessionStatus.HANGING_UP, SessionStatus.ENDED, SessionStatus.FAILED}:
+            logger.info(
+                "request_stop ignored: reason={} status={} termination_code={} session_id={}",
+                reason,
+                session_context.status,
+                session_context.termination_code,
+                session_context.session_id,
+            )
             return
+        logger.info(
+            "request_stop accepted: reason={} status_before={} termination_code_before={} session_id={}",
+            reason,
+            session_context.status,
+            session_context.termination_code,
+            session_context.session_id,
+        )
         # Normalize free-form stop reasons into stable termination codes.
         if reason == TerminationCode.SILENCE_TIMEOUT.value:
             session_context.termination_code = TerminationCode.SILENCE_TIMEOUT
@@ -208,6 +222,13 @@ async def run_session(websocket: WebSocket, start_message: SessionStartMessage) 
             pass
         session_context.status = SessionStatus.HANGING_UP
         session_context.ended_at = datetime.now(UTC)
+        logger.info(
+            "request_stop transitioned session: reason={} status_after={} termination_code_after={} session_id={}",
+            reason,
+            session_context.status,
+            session_context.termination_code,
+            session_context.session_id,
+        )
         await resources.repositories.events.append(
             session_id=session_context.session_id,
             sequence=session_context.next_sequence(),
@@ -254,6 +275,15 @@ async def run_session(websocket: WebSocket, start_message: SessionStartMessage) 
             user_response_timeout_ms=start_message.payload.runtime.user_response_timeout_ms,
             max_silence_follow_ups=start_message.payload.runtime.max_silence_follow_ups,
         )
+        logger.info(
+            "Session runtime config: barge_in={} post_bot_grace_ms={} user_response_timeout_ms={} max_silence_follow_ups={} max_session_duration_ms={} session_id={}",
+            start_message.payload.runtime.barge_in,
+            start_message.payload.runtime.post_bot_grace_ms,
+            start_message.payload.runtime.user_response_timeout_ms,
+            start_message.payload.runtime.max_silence_follow_ups,
+            start_message.payload.runtime.max_session_duration_ms,
+            session_context.session_id,
+        )
         pipeline_resources = build_pipeline_task(
             session_context=session_context,
             transport_adapter=transport_adapter,
@@ -275,13 +305,20 @@ async def run_session(websocket: WebSocket, start_message: SessionStartMessage) 
         @silence_detector.event_handler("on_silence_detected")
         async def _on_silence_detected(_, silence_count: int) -> None:
             nonlocal force_silence_hangup_task
+            logger.info(
+                "Silence event received: round={} session_status={} task_present={} session_id={}",
+                silence_count,
+                session_context.status,
+                bool(task),
+                session_context.session_id,
+            )
             if session_context.status != SessionStatus.ACTIVE or not task:
                 return
 
             language = start_message.payload.conversation.language
             max_count = silence_detector.max_silence_follow_ups
-            logging.info(
-                "No-response detected: round=%s, max=%s, session_id=%s",
+            logger.info(
+                "No-response detected: round={}, max={}, session_id={}",
                 silence_count,
                 max_count,
                 session_context.session_id,
@@ -308,13 +345,29 @@ async def run_session(websocket: WebSocket, start_message: SessionStartMessage) 
                 return
 
             follow_up_message = build_no_response_follow_up(language)
-            logging.info(
-                "No-response follow-up queued: round=%s, max=%s, message=%r",
+            logger.info(
+                "No-response follow-up queued: round={}, max={}, message={!r}",
                 silence_count,
                 max_count,
                 follow_up_message,
             )
             await task.queue_frame(TTSSpeakFrame(follow_up_message, append_to_context=False))
+
+        @pipeline_resources.hangup_sanitizer.event_handler("on_hangup_started")
+        async def _on_hangup_started(_) -> None:
+            logger.info(
+                "Hangup started; disabling silence detector and moving session to HANGING_UP session_id={}",
+                session_context.session_id,
+            )
+            if session_context.status != SessionStatus.ACTIVE:
+                return
+            await silence_detector.disable()
+            try:
+                resources.state_machine.transition(SessionStatus.HANGING_UP)
+            except Exception:
+                pass
+            session_context.status = SessionStatus.HANGING_UP
+            session_context.termination_code = session_context.termination_code or TerminationCode.NORMAL_END
 
         runner_task = asyncio.create_task(runner.run(task))
         max_duration_task = asyncio.create_task(max_duration_guard())
@@ -399,7 +452,7 @@ async def run_session(websocket: WebSocket, start_message: SessionStartMessage) 
         await close_websocket_if_open(code=1011, reason="provider_error")
     except Exception as exc:
         # Catch-all runtime error path.
-        logging.exception("Session failed")
+        logger.exception("Session failed")
         session_context.status = SessionStatus.FAILED
         session_context.termination_code = session_context.termination_code or TerminationCode.RUNTIME_ERROR
         session_context.ended_at = datetime.now(UTC)
