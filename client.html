@@ -70,6 +70,50 @@
             margin-bottom: 30px;
         }
 
+        .config-panel {
+            margin-bottom: 24px;
+            padding: 18px 20px;
+            border-radius: 16px;
+            background: rgba(15, 23, 42, 0.45);
+            border: 1px solid var(--glass-border);
+        }
+
+        .config-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+        }
+
+        .config-copy strong {
+            display: block;
+            font-size: 1rem;
+            margin-bottom: 4px;
+        }
+
+        .config-copy p {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            line-height: 1.5;
+        }
+
+        .toggle {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            font-weight: 600;
+            cursor: pointer;
+            user-select: none;
+            white-space: nowrap;
+        }
+
+        .toggle input {
+            width: 18px;
+            height: 18px;
+            accent-color: var(--accent);
+            cursor: pointer;
+        }
+
         button {
             padding: 14px 32px;
             font-size: 1.1rem;
@@ -168,6 +212,19 @@
             </button>
         </div>
 
+        <div class="config-panel">
+            <div class="config-item">
+                <div class="config-copy">
+                    <strong>请求参数</strong>
+                    <p>控制本次 `session.start` 是否允许用户在机器人播报期间插话打断。该选项会写入 `payload.runtime.barge_in`。</p>
+                </div>
+                <label class="toggle" for="interruptionsToggle">
+                    <input type="checkbox" id="interruptionsToggle" checked>
+                    <span>允许打断</span>
+                </label>
+            </div>
+        </div>
+
         <div class="log-container" id="logs"></div>
     </div>
 
@@ -176,6 +233,7 @@
         const disconnectBtn = document.getElementById('disconnectBtn');
         const logsDiv = document.getElementById('logs');
         const statusDot = document.getElementById('statusDot');
+        const interruptionsToggle = document.getElementById('interruptionsToggle');
 
         let ws = null;
         let audioCtx = null;
@@ -293,7 +351,7 @@
                 await initAudio();
 
                 log('🌐 正在连接后端 WebSocket 服务...', 'info');
-                ws = new WebSocket('ws://127.0.0.1:8000/v1/outbound/session');
+                ws = new WebSocket('ws://127.0.0.1:8008/v1/outbound/session');
                 ws.binaryType = 'arraybuffer'; // 确保接收格式为 ArrayBuffer（而不是 Blob）以直接解码
 
                 ws.onopen = () => {
@@ -335,13 +393,19 @@
                                     container: "raw"
                                 }
                             },
-                            runtime: { barge_in: true, post_bot_grace_ms: 2000, user_response_timeout_ms: 6000, max_silence_follow_ups: 3, max_session_duration_ms: 180000 },
+                            runtime: {
+                                barge_in: interruptionsToggle.checked,
+                                post_bot_grace_ms: 2000,
+                                user_response_timeout_ms: 6000,
+                                max_silence_follow_ups: 3,
+                                max_session_duration_ms: 180000
+                            },
                             metadata: { client: "html-web-client" }
                         }
                     };
                     
                     ws.send(JSON.stringify(startMessage));
-                    log(`>> 发送控制帧: [session.start]`, 'send');
+                    log(`>> 发送控制帧: [session.start] runtime.barge_in=${startMessage.payload.runtime.barge_in}`, 'send');
                 };
 
                 ws.onmessage = (event) => {

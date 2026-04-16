@@ -95,6 +95,11 @@ class RuntimeMetricsCollector:
         self.active_turn = None
         return finished
 
+    def mark_active_turn_interrupted(self) -> None:
+        """标记当前 assistant turn 被用户打断。"""
+        if self.active_turn:
+            self.active_turn.interrupted = True
+
     def record_text_chars(self, char_count: int) -> None:
         """记录当前轮次输出文本长度。"""
         if self.active_turn:

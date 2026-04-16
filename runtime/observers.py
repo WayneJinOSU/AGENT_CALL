@@ -13,6 +13,7 @@ from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
     BotStoppedSpeakingFrame,
     InterimTranscriptionFrame,
+    InterruptionFrame,
     MetricsFrame,
     TextFrame,
     TranscriptionFrame,
@@ -81,6 +82,10 @@ class RuntimePersistenceObserver(BaseObserver):
 
         if isinstance(frame, BotStartedSpeakingFrame):
             self._metrics.start_assistant_turn()
+            return
+
+        if isinstance(frame, InterruptionFrame):
+            self._metrics.mark_active_turn_interrupted()
             return
 
         if isinstance(frame, TextFrame):

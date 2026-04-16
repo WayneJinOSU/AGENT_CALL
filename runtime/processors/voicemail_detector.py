@@ -1,11 +1,11 @@
-"""Detect voicemail prompts and replace user utterance with voicemail instruction."""
+"""Detect voicemail prompts and inject a forced voicemail instruction."""
 
 from __future__ import annotations
 
 import re
 
 from loguru import logger
-from pipecat.frames.frames import Frame, TextFrame, TranscriptionFrame
+from pipecat.frames.frames import Frame, LLMMessagesAppendFrame, TextFrame, TranscriptionFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 
@@ -62,8 +62,15 @@ class VoicemailDetector(FrameProcessor):
                 if self._voicemail_regex.search(check_text) or self._COMPACT_VOICEMAIL_REGEX.search(compact_text):
                     logger.info("[VoicemailDetector] Detected voicemail keywords.")
                     self._detected = True
-                    frame.text = self._prompt
                     self._buffer = ""
+                    await self.push_frame(
+                        LLMMessagesAppendFrame(
+                            messages=[{"role": "user", "content": self._prompt}],
+                            run_llm=True,
+                        ),
+                        direction,
+                    )
+                    return
 
         await self.push_frame(frame, direction)
 
