@@ -349,6 +349,7 @@ async def run_session(websocket: WebSocket, start_message: SessionStartMessage) 
         @pipeline_resources.user_aggregator.event_handler("on_user_turn_stopped")
         async def _on_user_turn_stopped(_, strategy, message: UserTurnStoppedMessage) -> None:
             strategy_name = strategy.__class__.__name__
+            pipeline_resources.interrupt_deduper.finalize_utterance(text=message.content)
             logger.info(
                 "Turn event: on_user_turn_stopped strategy={} transcript={!r} session_id={}",
                 strategy_name,

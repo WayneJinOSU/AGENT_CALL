@@ -26,7 +26,13 @@ from pipecat.turns.user_mute import (
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 from runtime.observers import RuntimePersistenceObserver
-from runtime.processors import EmergencyInterruptProcessor, SilenceDetector, VoicemailDetector, WordAwareSanitizer
+from runtime.processors import (
+    EmergencyInterruptProcessor,
+    InterruptDeduper,
+    SilenceDetector,
+    VoicemailDetector,
+    WordAwareSanitizer,
+)
 from runtime.turn_strategies import LoggingMinWordsUserTurnStartStrategy
 from runtime.transport import SessionMessageRouter, SessionTransportAdapter
 from session.context import SessionContext
@@ -44,6 +50,7 @@ class PipelineResources:
     task: PipelineTask
     context: LLMContext
     hangup_sanitizer: WordAwareSanitizer
+    interrupt_deduper: InterruptDeduper
     user_aggregator: object
     assistant_aggregator: object
 
@@ -61,7 +68,12 @@ def _build_vad_analyzer(*, sample_rate: int, allow_interruptions: bool) -> VADAn
         return None
 
 
-def build_user_aggregator_params(*, allow_interruptions: bool, sample_rate: int) -> LLMUserAggregatorParams:
+def build_user_aggregator_params(
+    *,
+    allow_interruptions: bool,
+    sample_rate: int,
+    interrupt_deduper: InterruptDeduper | None = None,
+) -> LLMUserAggregatorParams:
     """Build coordinated interruption behavior for the user aggregator."""
     if allow_interruptions:
         mute_strategies = [
@@ -83,6 +95,7 @@ def build_user_aggregator_params(*, allow_interruptions: bool, sample_rate: int)
                 LoggingMinWordsUserTurnStartStrategy(
                     min_words=MIN_WORDS_BARGE_IN_THRESHOLD,
                     use_interim=True,
+                    interrupt_deduper=interrupt_deduper,
                 )
             ],
             stop=[
@@ -118,13 +131,24 @@ def build_pipeline_task(
         *session_context.start_payload.conversation.initial_messages,
     ]
     context = LLMContext(message_history)
+    interrupt_deduper = InterruptDeduper(
+        similarity_threshold=session_context.start_payload.runtime.interrupt_repeat_similarity_threshold,
+        suppression_window_ms=session_context.start_payload.runtime.interrupt_repeat_suppression_ms,
+    )
     user_params = build_user_aggregator_params(
         allow_interruptions=session_context.start_payload.runtime.barge_in,
         sample_rate=session_context.start_payload.media.sample_rate,
+        interrupt_deduper=interrupt_deduper,
     )
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(context, user_params=user_params)
-    voicemail_detector = VoicemailDetector(language=session_context.start_payload.conversation.language)
-    emergency_interrupt = EmergencyInterruptProcessor(interrupt_handler=interrupt_handler)
+    voicemail_detector = VoicemailDetector(
+        language=session_context.start_payload.conversation.language,
+        interrupt_handler=interrupt_handler,
+    )
+    emergency_interrupt = EmergencyInterruptProcessor(
+        interrupt_handler=interrupt_handler,
+        interrupt_deduper=interrupt_deduper,
+    )
     hangup_sanitizer = WordAwareSanitizer()
     audio_buffer = AudioBufferProcessor(
         sample_rate=session_context.start_payload.media.sample_rate,
@@ -174,6 +198,7 @@ def build_pipeline_task(
         task=task,
         context=context,
         hangup_sanitizer=hangup_sanitizer,
+        interrupt_deduper=interrupt_deduper,
         user_aggregator=user_aggregator,
         assistant_aggregator=assistant_aggregator,
     )

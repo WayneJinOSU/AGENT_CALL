@@ -77,6 +77,8 @@ class RuntimeConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     barge_in: bool = True
+    interrupt_repeat_similarity_threshold: float = Field(default=0.8, ge=0.0, le=1.0)
+    interrupt_repeat_suppression_ms: int = Field(default=3000, ge=0)
     post_bot_grace_ms: int = Field(default=2000, ge=0)
     user_response_timeout_ms: int = Field(default=6000, ge=1)
     max_silence_follow_ups: int = Field(default=3, ge=1)

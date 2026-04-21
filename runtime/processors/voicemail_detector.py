@@ -3,25 +3,43 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Awaitable, Callable
 
 from loguru import logger
-from pipecat.frames.frames import Frame, LLMMessagesAppendFrame, TextFrame, TranscriptionFrame
+from pipecat.frames.frames import (
+    BotStartedSpeakingFrame,
+    BotStoppedSpeakingFrame,
+    Frame,
+    InterimTranscriptionFrame,
+    LLMMessagesAppendFrame,
+    TextFrame,
+    TranscriptionFrame,
+)
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+
+VoicemailInterruptHandler = Callable[[dict[str, str]], Awaitable[None]]
 
 
 class VoicemailDetector(FrameProcessor):
     """Match voicemail keywords from STT text and force a voicemail response prompt."""
 
     _COMPACT_VOICEMAIL_REGEX = re.compile(
-        r"(?:语音信箱|开始留言|无法接通|号码不存在|不在服务区|听到?滴?声)",
+        r"(?:语音信箱|开始留言|请留言|无法接通|无法应答|暂时无人接听|号码不存在|不在服务区|转入留言|转到留言|听到?[滴嘀哔]?声)",
         re.I,
     )
 
-    def __init__(self, max_buffer_chars: int = 600, language: str = "") -> None:
+    def __init__(
+        self,
+        max_buffer_chars: int = 600,
+        language: str = "",
+        interrupt_handler: VoicemailInterruptHandler | None = None,
+    ) -> None:
         super().__init__()
         self._detected = False
         self._buffer = ""
         self._max_buffer_chars = max_buffer_chars
+        self._assistant_speaking = False
+        self._interrupt_handler = interrupt_handler
         self._voicemail_regex = re.compile(
             r"(?i)("
             r"\b(?:b?uz[oó]n|(?:ser)?vicio\s+de\s+buz[oó]n|correo\s+de\s+voz|contestador)\b|"
@@ -37,13 +55,20 @@ class VoicemailDetector(FrameProcessor):
             r"\bvoice\s*mail\b|"
             r"\b(?:leave|record)\s+(?:a\s+|your\s+)?message\b|"
             r"\b(?:after|at)\s+the\s+tone\b|"
+            r"\b(?:please\s+)?leave\s+(?:your\s+)?message\b|"
+            r"\b(?:sorry,?\s+)?(?:the\s+)?person\s+you\s+(?:are\s+)?trying\s+to\s+reach\b|"
             r"\bunavailable\b|"
-            r"听到?\s*滴?\s*声|"
+            r"听到?\s*[滴嘀哔]?\s*声|"
             r"开始\s*留言|"
+            r"请\s*留言|"
             r"无法\s*接通|"
+            r"无法\s*应答|"
+            r"暂时\s*无人\s*接听|"
             r"号码\s*不存在|"
             r"语音\s*信箱|"
-            r"不在\s*服务区"
+            r"不在\s*服务区|"
+            r"转入\s*留言|"
+            r"转到\s*留言"
             r")"
         )
         self._prompt = self._build_prompt(language)
@@ -51,7 +76,11 @@ class VoicemailDetector(FrameProcessor):
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
 
-        if isinstance(frame, (TextFrame, TranscriptionFrame)) and not self._detected:
+        if isinstance(frame, BotStartedSpeakingFrame):
+            self._assistant_speaking = True
+        elif isinstance(frame, BotStoppedSpeakingFrame):
+            self._assistant_speaking = False
+        elif isinstance(frame, (TextFrame, TranscriptionFrame, InterimTranscriptionFrame)) and not self._detected:
             text = frame.text.strip()
             if text:
                 self._buffer += text
@@ -60,9 +89,22 @@ class VoicemailDetector(FrameProcessor):
                 check_text = self._buffer.strip()
                 compact_text = re.sub(r"\s+", "", check_text)
                 if self._voicemail_regex.search(check_text) or self._COMPACT_VOICEMAIL_REGEX.search(compact_text):
-                    logger.info("[VoicemailDetector] Detected voicemail keywords.")
+                    transcript_type = self._get_transcript_type(frame)
+                    logger.info(
+                        "[VoicemailDetector] Detected voicemail keywords transcript_type={} text={!r}.",
+                        transcript_type,
+                        frame.text,
+                    )
                     self._detected = True
                     self._buffer = ""
+                    if self._assistant_speaking and self._interrupt_handler is not None:
+                        await self._interrupt_handler(
+                            {
+                                "reason": "voicemail_detected",
+                                "text": frame.text,
+                                "transcript_type": transcript_type,
+                            }
+                        )
                     await self.push_frame(
                         LLMMessagesAppendFrame(
                             messages=[{"role": "user", "content": self._prompt}],
@@ -73,6 +115,14 @@ class VoicemailDetector(FrameProcessor):
                     return
 
         await self.push_frame(frame, direction)
+
+    @staticmethod
+    def _get_transcript_type(frame: Frame) -> str:
+        if isinstance(frame, InterimTranscriptionFrame):
+            return "interim"
+        if isinstance(frame, TranscriptionFrame):
+            return "final"
+        return "text"
 
     @staticmethod
     def _build_prompt(language: str) -> str:
