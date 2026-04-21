@@ -18,5 +18,18 @@
 - 并给调用客户端返回第一帧安全启动的事件信号包 (`SessionReadyMessage`) 让客户端能够准备对向讲话。此后进入无限接收轮询并在最后抛出计算好的系统整体流量情况 (`metrics`) 并执行落地善后的任务 (`finalize_session`) 返回所有统计。
 - 使用强力的异常拦截层进行失败处理(`finally`, `except`) 清理内存注册池内的任务和游离 Task 线程垃圾。
 
+### 4. 运行期协同点
+这一层还有两个容易被忽视、但现在很关键的协同点：
+
+- `on_user_turn_stopped`
+  runner 不只记录事件；还会把完整 user utterance 回灌给 session 级 `InterruptDeduper`
+- `on_silence_detected`
+  runner 收到沉默事件后，决定是继续播报“您好，还在听吗？”还是改写上下文让 LLM 礼貌结束通话
+
+前者的作用是：
+- 让 deduper 不只记“已触发的打断句”
+- 还知道最近完整的正常用户句子
+- 从而支持“上次正常说过、这次又拿同一句打断”的抑制
+
 ## 模块依赖与关系 (Dependencies)
 - 这几乎是一个高维度的缝合器。依赖大量外部类，向上依靠网关投递包、向下使用管线装配与最终的基于 SqlAlchemy `repositories`（落库脚本）完成善后收容。

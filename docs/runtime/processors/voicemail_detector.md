@@ -5,7 +5,7 @@
 
 一旦命中，它不会把原始转写继续交给普通对话流程，而是强制注入一条高优先级 user message，让 LLM 立即切换到留言模式。
 
-## 为什么不能只改写原始 `TranscriptionFrame`
+## 为什么不能只改写原始转写 frame
 当前实现使用的是：
 - `LLMMessagesAppendFrame(messages=[...], run_llm=True)`
 
@@ -36,10 +36,18 @@
 ### `_detected`
 一旦命中过一次，就不再重复触发。
 
+### `_assistant_speaking` / `_interrupt_handler`
+当前实现还会跟踪 assistant 是否正在播报。
+
+如果命中 voicemail 文本时 bot 还在说话，并且构造时注入了 `interrupt_handler`：
+- 会先请求一次 interruption
+- 再通过 `LLMMessagesAppendFrame` 强制把 LLM 切到留言逻辑
+
 ## `process_frame()`
 仅在 frame 属于：
 - `TextFrame`
 - `TranscriptionFrame`
+- `InterimTranscriptionFrame`
 
 且尚未 `_detected` 时做检查。
 
@@ -47,8 +55,9 @@
 1. 记录日志
 2. 把 `_detected` 置为 `True`
 3. 清空缓冲
-4. 向下游推一条 `LLMMessagesAppendFrame`
-5. `return`
+4. 如果 bot 正在说话，先请求 interruption
+5. 向下游推一条 `LLMMessagesAppendFrame`
+6. `return`
 
 注意最后这一步：命中后不会继续把当前原始转写往下游传。
 
@@ -70,3 +79,4 @@
 ## 读代码时要注意的点
 - 这个处理器是一次性触发的，不会反复来回切换模式
 - 它的核心价值不是“识别文本”，而是“以可绕过 mute 的方式强推新语义”
+- 它现在支持 interim 级别的提早命中，因此通常比只看 final 转写更快

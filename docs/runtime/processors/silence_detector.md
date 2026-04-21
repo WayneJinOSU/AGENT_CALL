@@ -5,6 +5,11 @@
 
 它不是基于 STT 文本内容判断沉默，而是基于 speaking 控制帧管理一个计时器。
 
+这点非常重要：
+- “看到了 STT 文本” 不等于 `SilenceDetector` 一定会复位
+- 它真正依赖的是 `UserStartedSpeakingFrame`
+- 而 `UserStartedSpeakingFrame` 又依赖 user turn start 策略能成功触发
+
 ## 设计目标
 它要解决的是：
 
@@ -52,6 +57,18 @@
 这里不再依赖 frame 方向判断。
 
 这是一个关键修复点，因为 Pipecat 广播 `UserStartedSpeakingFrame` 时可能不是早期假设的固定方向。
+
+但还要再注意一层：
+- 如果 start strategy 自己被错误状态卡住
+- 后面虽然持续有 `InterimTranscriptionFrame` / `TranscriptionFrame`
+- 也可能迟迟收不到新的 `UserStartedSpeakingFrame`
+
+这时表面现象会像：
+- 用户已经在说话
+- STT 也出了文本
+- 但沉默检测还是继续超时
+
+根因通常不在 `SilenceDetector` 本身，而在 user turn start 链路。
 
 ### 收到 `BotStartedSpeakingFrame` 且方向是 `UPSTREAM`
 - 取消当前沉默等待
@@ -123,3 +140,12 @@ runner 在外部注册这个事件后，可以根据 `silence_count` 做两种�
 - `BotStoppedSpeakingFrame received; arming silence wait`
 - `Cancelling silence wait`
 - `Silence timeout fired`
+
+如果还想确认是不是 turn-start 链路导致的误判，再往上看两类日志：
+- `LoggingMinWordsUserTurnStartStrategy ... should_trigger=True`
+- `session.runner:_on_user_turn_started ...`
+
+如果前者持续出现、后者却没有出现，说明：
+- STT 文本到了
+- 但用户 turn 没真正开始
+- `SilenceDetector` 因而不会收到复位所需的 speaking 控制帧

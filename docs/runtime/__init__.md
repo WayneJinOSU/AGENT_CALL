@@ -13,6 +13,8 @@
 ## 目录说明
 - `pipeline_factory.py`
   负责把 transport、processors、LLM/TTS/STT、observer 装成一条可运行的 `PipelineTask`
+- `turn_strategies.py`
+  放项目自定义的 user turn start 策略封装，当前主要负责 `MinWords` 日志增强与重复打断抑制接入
 - `transport.py`
   负责把北向协议消息转成内部控制帧，并创建底层 `FastAPIWebsocketTransport`
 - `observers.py`
@@ -26,8 +28,8 @@
 runtime 层里有三条最容易出问题、也最需要读文档时重点关注的链路：
 
 1. 打断链路
-   `runtime.pipeline_factory.build_user_aggregator_params()` 同时控制 `PipelineParams.allow_interruptions`、`LLMUserAggregatorParams.user_mute_strategies`、`user_turn_stop_timeout` 和 `SileroVADAnalyzer.stop_secs`
+   `runtime.pipeline_factory.build_user_aggregator_params()` 同时控制 `PipelineParams.allow_interruptions`、`LLMUserAggregatorParams.user_mute_strategies`、`user_turn_stop_timeout`、`SileroVADAnalyzer.stop_secs`，并把 session 级 `InterruptDeduper` 接到普通 barge-in 与关键词打断两条链路
 2. 沉默追问链路
-   `runtime.processors.silence_detector.SilenceDetector` 只在 bot 真正停止说话后开始计时，并在用户开始说话或 bot 重启播报时取消
+   `runtime.processors.silence_detector.SilenceDetector` 只在 bot 真正停止说话后开始计时，并在 `UserStartedSpeakingFrame` 或 bot 重启播报时取消；因此它是否正确复位，依赖 user turn start 策略能及时触发 speaking 控制帧
 3. 挂断收尾链路
    `runtime.processors.word_aware_sanitizer.WordAwareSanitizer` 检测告别语，先发 `on_hangup_started` 给 runner 关闭沉默检测，再在下游推 `EndFrame`

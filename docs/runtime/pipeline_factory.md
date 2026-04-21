@@ -20,6 +20,8 @@
   `LLMContext`，runner 可直接改写它来追加 system message 或重新触发 LLM
 - `hangup_sanitizer`
   `WordAwareSanitizer` 实例，runner 通过它监听 `on_hangup_started`
+- `interrupt_deduper`
+  session 级 `InterruptDeduper`，由普通 barge-in、关键词打断和 runner 的 user-turn 落地逻辑共享
 
 ## 打断策略常量
 文件顶部有四个关键常量：
@@ -55,6 +57,13 @@
 1. `user_mute_strategies`
 2. `user_turn_stop_timeout`
 3. `vad_analyzer`
+
+另外，当前实现还会把一个 session 级 `InterruptDeduper` 注入 `LoggingMinWordsUserTurnStartStrategy`。
+
+它的职责不是决定“能不能开口”，而是决定：
+- 这次 barge-in 是否和最近用户句子高度相似
+- interim 阶段是否先 `defer`
+- final 阶段是否真正 `suppress`
 
 ### 可打断模式
 `allow_interruptions=True` 时：
@@ -95,11 +104,15 @@
 
 ### 2. 初始化聚合器与文本级控制处理器
 - `LLMContextAggregatorPair`
+- `InterruptDeduper`
+- `EmergencyInterruptProcessor`
 - `VoicemailDetector`
 - `WordAwareSanitizer`
 - `AudioBufferProcessor`
 
 其中：
+- `InterruptDeduper` 负责维护最近一段用户句子历史，为普通 barge-in / 关键词打断提供重复句抑制
+- `EmergencyInterruptProcessor` 负责高优先级 stop 关键词打断，并共享同一个 `InterruptDeduper`
 - `VoicemailDetector` 负责把“语音信箱”类文本强制变成一条高优先级 user message
 - `WordAwareSanitizer` 负责识别结束语并启动挂断收尾
 
@@ -111,6 +124,7 @@ transport.input()
 -> router
 -> silence_detector
 -> stt_service
+-> emergency_interrupt
 -> voicemail_detector
 -> user_aggregator
 -> llm_service
@@ -129,6 +143,15 @@ transport.input()
 - `EndFrame`
 
 这些控制帧并不依赖 STT 文本本身。把它前置可以更早观察整条链路的 speaking 状态。
+
+但要注意：
+- 它虽然不依赖 STT 文本做判定
+- 却依赖 user turn start 链路及时广播 `UserStartedSpeakingFrame`
+
+如果 start strategy 被错误状态卡住，就可能出现：
+- 后面持续有 STT 文本
+- 但 `UserStartedSpeakingFrame` 没再发出来
+- `SilenceDetector` 于是误以为用户没有回应
 
 ### 为什么 `hangup_sanitizer` 放在 LLM 和 TTS 之间？
 因为它要看 assistant 文本流，但不应该改动上游 user aggregation。
@@ -163,11 +186,20 @@ transport.input()
 入口只有一个：
 - `runtime.barge_in`
 
-但它会影响四个地方：
+但当前实现里，打断行为实际上由两层共同决定：
+- Pipecat 的全局 interruption 开关与 mute/VAD 策略
+- session 级 `InterruptDeduper`
+
+前者会影响四个地方：
 - `PipelineParams.allow_interruptions`
 - `user_mute_strategies`
 - `user_turn_stop_timeout`
 - `SileroVADAnalyzer.stop_secs`
+
+后者会影响三件事：
+- 普通 barge-in 是否视为重复句
+- interim 是否先 `defer`
+- 关键词打断是否因为近似文本被抑制
 
 所以看到“打断异常”时，不要只盯 `PipelineParams`。
 
