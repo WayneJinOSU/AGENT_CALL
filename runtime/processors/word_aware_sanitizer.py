@@ -6,7 +6,14 @@ import asyncio
 import re
 
 from loguru import logger
-from pipecat.frames.frames import EndFrame, Frame, LLMFullResponseEndFrame, LLMTextFrame, TextFrame
+from pipecat.frames.frames import (
+    EndFrame,
+    Frame,
+    InterruptionFrame,
+    LLMFullResponseEndFrame,
+    LLMTextFrame,
+    TextFrame,
+)
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 
@@ -49,7 +56,12 @@ class WordAwareSanitizer(FrameProcessor):
             return None
 
         if self._is_hanging_up:
-            # Let control frames pass through so downstream can finish the current turn.
+            # Once farewell has started, ignore barge-in noise so TTS can finish the closing phrase.
+            if isinstance(frame, InterruptionFrame):
+                logger.info("[WordAwareSanitizer] suppressing interruption during hangup")
+                return
+
+            # Let other control frames pass through so downstream can finish the current turn.
             if isinstance(frame, EndFrame):
                 self._is_ended = True
             if not isinstance(frame, (LLMTextFrame, TextFrame)):
